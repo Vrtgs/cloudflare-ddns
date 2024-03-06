@@ -5,26 +5,44 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-
 [profile.release]
     opt-level = 3
     lto = "fat"
     strip = true
-
-[dependencies.windows]
-version = "0.51.1"
-features = [
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_Foundation"
-]
+    codegen-units = 1
+    panic = "unwind"
 
 [dependencies]
-tokio        = { version = "1.32.0", features = ["full"] }
-futures      = { version = "0.3.28"  }
-reqwest      = { version = "0.11.19", features = ["stream"] }
-mimalloc     = { version = "*", default-features = false }
-uuid         = { version = "1.4.1", features = ["v4"] }
-bytes        = "1.4.0"
-serde        = "1.0.185"
-async-trait  = "0.1.73"
-simd-json    = "0.10.6"
+tokio              = { version = "1.36.0", features = ["full"] }
+futures            = { version = "0.3.30"}
+reqwest-middleware = "0.2.4"
+mimalloc           = { version = "*" }
+ascii              = "1.1.0"
+heap-array         = "0.1.7"
+bytes              = "1.5.0"
+async-trait        = "0.1.77"
+serde              = "1"
+simd-json          = "0.13.8"
+simd-json-derive   = "0.13.0"
+thiserror          = "1.0.56"
+uuid               = { version = "1.7.0", features = ["v4"] }
+count_tts          = "0.2.0"
+
+[dependencies.reqwest]
+version = "0.11.24"
+features = [
+    "stream", "rustls-tls-native-roots", "trust-dns", "brotli", "default", "gzip"
+]
+
+
+[dependencies.windows]
+version = "0.52.0"
+features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    "implement",
+    "Win32_System_Com",
+    "Win32_System_EventNotificationService",
+    "Win32_System_Ole",
+    "Win32_System_Variant"
+]

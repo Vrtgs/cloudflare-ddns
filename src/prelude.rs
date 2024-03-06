@@ -1,7 +1,7 @@
 use reqwest::header::HeaderName;
-use async_trait::async_trait;
 use reqwest::Response;
-use serde::de::DeserializeOwned;
+use simd_json_derive::Deserialize;
+use thiserror::Error;
 
 
 #[allow(clippy::declare_interior_mutable_const)]
@@ -10,24 +10,22 @@ pub const AUTHORIZATION_EMAIL: HeaderName = HeaderName::from_static("x-auth-emai
 pub const AUTHORIZATION_KEY: HeaderName = HeaderName::from_static("x-auth-key");
 
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum JsonError {
-    Deserialize(simd_json::Error),
-    Reqwest(reqwest::Error)
+    #[error(transparent)]
+    Deserialize(#[from] simd_json::Error),
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error)
 }
 
-#[async_trait]
 pub trait SimdJsonCompat {
-    async fn json<T: DeserializeOwned>(self) -> Result<T, JsonError>;
+    async fn simd_json<T: for<'de> Deserialize<'de>>(self) -> Result<T, JsonError>;
 }
 
-#[async_trait]
 impl SimdJsonCompat for Response {
-    async fn json<T: DeserializeOwned>(self) -> Result<T, JsonError> {
-        let mut bytes = self.bytes().await
-            .map_err(JsonError::Reqwest)?
-            .to_vec();
+    async fn simd_json<T: for<'de> Deserialize<'de>>(self) -> Result<T, JsonError> {
+        let mut bytes = Vec::from(self.bytes().await?);
 
-        simd_json::from_slice(&mut bytes).map_err(JsonError::Deserialize)
+        T::from_slice(&mut bytes).map_err(JsonError::Deserialize)
     }
 }

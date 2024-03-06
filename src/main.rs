@@ -1,158 +1,130 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
 use std::net::{AddrParseError, Ipv4Addr};
-use std::process::exit;
 use std::str::FromStr;
+use std::thread;
 use std::time::Duration;
+use ascii::{AsciiStr};
 use bytes::Bytes;
 use futures::future::select_ok;
-use futures::FutureExt;
-use reqwest::Client;
-use reqwest::header::{CONTENT_TYPE, HeaderValue};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
+use simd_json_derive::Deserialize;
+use thiserror::Error;
 use tokio::process::Command;
+use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
-use windows::core::{PCWSTR, w};
-use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 use crate::prelude::*;
 use crate::entity::*;
-
-macro_rules! retry {
-    ($fut:expr) => {async {
-        match $fut.await {
-            Ok(res) => Ok(res),
-            Err(..) => {
-                tokio::time::sleep(Duration::from_secs(60)).await;
-                match $fut.await {
-                    Ok(res) => Ok(res),
-                    err @ Err(_) => err,
-                }
-            }
-        }
-    }};
-}
-
-macro_rules! assert {
-    ($cond:expr, $($tokens:tt)*) => {
-        if !$cond {
-            panic!($($tokens)*)
-        }
-    };
-}
-
-macro_rules! panic {
-    ($err_msg:literal, $code:literal) => {
-        exit_err_inner(w!($err_msg), $code)
-    };
-    (f!$err_msg:tt, $code:literal) => {
-        exit_err(&format!($err_msg), $code)
-    };
-}
-
-macro_rules! patch_json {
-    ($val:expr) => {
-        format! {
-            concat!{
-                r###"{{"type":"A","name":""###,
-                include_str!("./secret/record"),
-                r###"","content":"{}","proxied":false}}"###
-            }, $val
-        }
-    };
-}
+use crate::retrying_client::RetryingClient;
+use fatal::*;
+use crate::updater::UpdateDns;
 
 macro_rules! patch_url {
     ($record_id:expr) => {
-        format! {concat!(
+        format! { concat!(
             "https://api.cloudflare.com/client/v4/zones/",
             include_str!("./secret/zone-id"),
             "/dns_records/{}"
-        ), $record_id}
+        ), $record_id }
     };
 }
 
-#[allow(clippy::declare_interior_mutable_const)]
-const AUTH_EMAIL: HeaderValue = HeaderValue::from_static("mirza123.the.best@gmail.com");
-#[allow(clippy::declare_interior_mutable_const)]
-const AUTH_KEY: HeaderValue = HeaderValue::from_static(include_str!("./secret/api-key"));
+macro_rules! static_headers {
+    ($(const $name: ident = $val: expr;)*) => {$(
+        #[allow(clippy::declare_interior_mutable_const)]
+        const $name: HeaderValue = HeaderValue::from_static($val);
+    )*};
+}
 
+static_headers! {
+    const AUTH_EMAIL = include_str!("secret/email"  );
+    const AUTH_KEY   = include_str!("secret/api-key");
+}
 
-const RECORD: &str = include_str!("./secret/record");
+const RECORD: &str = include_str!("secret/record");
 const GET_URL: &str = concat!(
     "https://api.cloudflare.com/client/v4/zones/",
-    include_str!("./secret/zone-id"),
+    include_str!("secret/zone-id"),
     "/dns_records?type=A&name=",
-    include_str!("./secret/record")
+    include_str!("secret/record")
 );
 
-const IP_CHECK_DOMAINS: [&str; 3] = [
-    "https://checkip.amazonaws.com/",
-    "https://api.ipify.org",
-    "https://ipv4.icanhazip.com/"
-];
+
+macro_rules! dyn_array {
+    (const $name: ident: [$ty:ty] = [$($domain: expr),* $(,)?];) => {
+        const $name: [$ty; { ::count_tts::count_tts!($($domain)*) }] = [$($domain),*];
+    };
+}
+
+dyn_array! {
+    const IP_CHECK_DOMAINS: [&str] = [
+        "https://checkip.amazonaws.com/",
+        "https://api.ipify.org",
+        "https://ipv4.icanhazip.com/",
+        "https://4.ident.me/",
+        "https://v4.tnedi.me/",
+        "https://v4.ipv6-test.com/api/myip.php",
+        "https://myip.dnsomatic.com/",
+        "https://ipinfo.io/ip",
+        "https://ipv4.nsupdate.info/myip",
+        "https://dynamic.zoneedit.com/checkip.html"
+    ];
+}
 
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod prelude;
 mod entity;
+mod retrying_client;
+mod fatal;
+mod updater;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 enum GetIPError {
-    Reqwest(reqwest::Error),
-    Ipv4Parse(AddrParseError)
+    #[error(transparent)]
+    Reqwest(#[from] reqwest::Error),
+    #[error(transparent)]
+    Ipv4Parse(#[from] AddrParseError),
+    #[error("invalid data returned")]
+    InvalidResponse
 }
-async fn get_ip(client: &Client) -> Result<String, GetIPError> {
+
+async fn get_ip(client: &RetryingClient) -> Result<Ipv4Addr, GetIPError> {
     let iter = IP_CHECK_DOMAINS
-        .map(|s| client.get(s).send())
-        .map(|fut| async {
-            fut.await.map_err(GetIPError::Reqwest)?.text().await
-                .map_err(GetIPError::Reqwest)
-                .and_then(|s| {
-                    if let Err(err) = Ipv4Addr::from_str(&s) {
-                        Err(GetIPError::Ipv4Parse(err))
-                    } else { Ok(s) }
-                })
-        }.boxed());
+        .map(|s| client.get(s).header(ACCEPT, HeaderValue::from_static("text/plain")).send())
+        .map(|fut| Box::pin(async {
+            let ip = fut.await?.bytes().await?;
+            if ip.len() > "xxx.xxx.xxx.xxx".len() { return Err(GetIPError::InvalidResponse) }
+
+            let Ok(str) = AsciiStr::from_ascii(&ip)
+                else { return Err(GetIPError::InvalidResponse) };
+
+            Ok(Ipv4Addr::from_str(str.as_str())?)
+        }));
 
     select_ok(iter).await.map(|(ip, _)|ip)
 }
 
-#[cfg(windows)]
-#[inline]
-fn exit_err_inner(err_msg: PCWSTR, code: i32) -> ! {
-    unsafe {
-        MessageBoxW(
-            None,
-            err_msg,
-            w!("CloudFlare DDNS Error"),
-            MB_OK | MB_ICONERROR
-        );
-    }
-
-    exit(code);
-}
-
-#[cfg(windows)]
-fn exit_err(err: &str, code: i32) -> ! {
-    let err_msg = err.encode_utf16()
-        .chain(std::iter::once(0)).collect::<Vec<_>>();
-
-    exit_err_inner(PCWSTR::from_raw(err_msg.as_ptr()), code)
-}
-
-async fn get_records(client: &Client) -> Result<Vec<Record>, JsonError> {
+async fn get_record(client: &RetryingClient) -> Result<OneOrLen<Record>, JsonError> {
     Ok(client.get(GET_URL)
         .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
         .header(AUTHORIZATION_KEY, AUTH_KEY)
         .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-        .send().await.map_err(JsonError::Reqwest)?
-        .json::<GetResponse>()
+        .send().await?
+        .simd_json::<GetResponse>()
         .await?
         .result)
 }
 
-async fn update_record(client: &Client, id: &str, ip: &str) -> Result<(), Bytes> {
-    let data = patch_json!(ip);
+async fn update_record(client: &RetryingClient, id: &str, ip: Ipv4Addr) -> MayPanic<Result<(), Bytes>> {
+    let data = format! {
+        concat! {
+            r###"{{"type":"A","name":""###,
+            include_str!("./secret/record"),
+            r###"","content":"{ip}","proxied":false}}"###
+        }, ip = ip
+    };
 
     let response = client.patch(patch_url!(id))
         .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
@@ -160,58 +132,52 @@ async fn update_record(client: &Client, id: &str, ip: &str) -> Result<(), Bytes>
         .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
         .body(data)
         .send().await
-        .unwrap_or_else(|err| panic!(f!"{err:?}", -444));
+        .map_err(|err| err!(f!"{err:?}", -444))?;
 
-    let mut failed = !response.status().is_success();
+    let failure = !response.status().is_success();
 
     let bytes = match response.bytes().await {
-        Ok(bytes) => {bytes}
-        Err(err) => return Err(Bytes::from(format!("unable to retrieve bytes because: {err:?}")))
+        Ok(bytes) => bytes,
+        Err(err) => return Ok(Err(Bytes::from(format!("unable to retrieve bytes because: {err:?}"))))
     };
 
-    let response = match simd_json::from_reader::<_, PatchResponse>(bytes.as_ref()) {
+    let response = match PatchResponse::from_slice(&mut bytes.to_vec()) {
         Ok(response) => response,
-        Err(err) => return Err(Bytes::from(format!("unable to deserialize json due to: {err:?}")))
+        Err(err) => return Ok(Err(Bytes::from(format!("unable to deserialize json due to: {err:?}"))))
     };
 
-    failed |= !response.success;
-
-    match failed {
-        false => Ok(()),
-        true  => Err(bytes),
+    match failure || !response.success {
+        false => Ok(Ok(())),
+        true  => Ok(Err(bytes)),
     }
 }
 
-#[tokio::main]
-async fn real_main() {
-    let client = Client::new();
-
+async fn run_ddns(client: &RetryingClient) -> MayPanic<()> {
     let ip_task = tokio::spawn({
         let client = client.clone();
-        async move {
-            match retry!((retry!(get_ip(&client)))).await {
-                Ok(ip) => ip,
-                Err(err) => { panic!(f!"{err:?}", -111) }
-            }
-        }
+        async move { get_ip(&client).await }
     });
 
+    let records = get_record(client).await
+        .map_err(|err| err!(f!"{err:?}", -222))?;
 
-    let records = retry!(retry!(get_records(&client))).await
-        .unwrap_or_else(|err| panic!(f!"{err:?}", -222));
 
-
-    match <[Record; 1]>::try_from(records) {
-        Ok([Record { id, ip, name}]) => {
-            assert!(name == RECORD, f!"Expected {RECORD} found {name}", 99);
+    match records {
+        OneOrLen::One(Record { id, ip, name}) => {
+            assert!(&*name == RECORD, f!"Expected {RECORD} found {name}", 99)?;
 
             let current_ip = ip_task.await
-                .unwrap_or_else(|err| panic!(f!"Join Error: {err:?}", -333));
+                .map_err(|err| err!(f!"Join Error: {err}", -333))?
+                .map_err(|err| err!(f!"Get Ip Error: {err}", -444))?;
 
-            if current_ip == ip { exit(0) }
+            let parsed_ip = Ipv4Addr::from_str(&ip);
+            match parsed_ip {
+                Err(_) => warn(&format!("cloudflare returned invalid ip: {ip}")),
+                Ok(ip) if ip == current_ip => return Ok(()),
+                Ok(_)  => {}
+            }
 
-
-            let response = retry!(retry!(update_record(&client, &id, &current_ip))).await;
+            let response = update_record(client, &id, current_ip).await?;
 
             if let Err(err) = response {
                 let string = String::from_utf8_lossy(err.as_ref());
@@ -220,36 +186,75 @@ async fn real_main() {
                     .join(Uuid::new_v4().to_string())
                     .with_extension("log");
 
-                tokio::fs::write(&path, string.as_ref()).await
-                    .unwrap_or_else(|err| panic!(f!"FATAL WRITE ERR: {err:?}", -666));
+                tokio::fs::write(&path, &*string).await
+                    .map_err(|err| err!(f!"FATAL WRITE ERR: {err:?}", -666))?;
 
                 Command::new("notepad").arg(&path).spawn()
-                    .unwrap_or_else(|err| panic!(f!"FATAL SPAWN ERR: {err:?}", -777))
+                    .map_err(|err| err!(f!"FATAL SPAWN ERR: {err:?}", -777))?
                     .wait().await
-                    .unwrap_or_else(|err| panic!(f!"FATAL SPAWN AWAIT ERR: {err:?}", -888));
+                    .map_err(|err| err!(f!"FATAL WAIT ERR: {err:?}", -777))?;
 
                 let _ = tokio::fs::remove_file(&path).await;
             }
-        }
-        Err(res) => {
-            let len = res.len();
-            panic!(f!"Expected 1 record Got {len}", 99);
-        }
+
+            Ok(())
+        },
+        OneOrLen::Len(len) => Err(err!(f!"Expected 1 record Got {len}", 99))
     }
 }
 
-fn main() {
-    std::panic::set_hook(Box::new(|info| {
-        let msg = match info.payload().downcast_ref::<&str>() {
-            Some(&s) => s,
-            None => match info.payload().downcast_ref::<String>() {
-                Some(s) => s.as_str(),
-                None => "Box<dyn Any>",
-            },
-        };
+fn real_main() -> ! {
+    let runtime = tokio::runtime::Runtime::new()
+        .expect("Failed to set up async context");
 
-        exit_err(msg, -0xFF)
-    }));
+    let client = RetryingClient::new();
 
-    real_main()
+    runtime.block_on(async {
+        let mut interval = tokio::time::interval(Duration::from_secs(60 * 60)); // 1 hour
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        let (tx, mut rx) = tokio::sync::watch::channel(UpdateDns);
+
+        runtime.spawn_blocking(move || {
+            drop(tx);
+            loop { thread::park() }
+        });
+
+        loop {
+            let run = || async {
+                dbg_println!("updating");
+
+                match run_ddns(&client).await {
+                    Err(panic) => {
+                        dbg_println!("responsibly panicking");
+                        let _ = std::panic::catch_unwind(panic);
+                        dbg_println!("caught panic");
+                    },
+
+                    Ok(()) => dbg_println!("successfully updated")
+                }
+            };
+
+            dbg_println!("We ran!");
+
+            tokio::select! {
+                res = rx.changed() => match res {
+                    Ok(()) => interval.reset_immediately(),
+                    Err(_) => {
+                        runtime.spawn_blocking(|| err("update task died"));
+                        loop {
+                            interval.tick().await;
+                            run().await
+                        }
+                    }
+                },
+                _ = interval.tick() => run().await
+            }
+        }
+    })
+}
+
+fn main() -> ! {
+    set_hook();
+    real_main();
 }
