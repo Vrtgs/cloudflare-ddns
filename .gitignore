@@ -1,4 +1,4 @@
 target
 .idea
-./src/api-key
-./src/secret
+/src/api-key
+/src/secret
