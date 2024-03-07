@@ -36,7 +36,7 @@ features = [
 
 
 [dependencies.windows]
-version = "0.52.0"
+version = "0.54.0"
 features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
@@ -44,5 +44,9 @@ features = [
     "Win32_System_Com",
     "Win32_System_EventNotificationService",
     "Win32_System_Ole",
-    "Win32_System_Variant"
+    "Win32_System_Variant",
+    "Win32_NetworkManagement",
+    "Win32_Networking",
+    "Win32_Networking_WinInet",
+    "Win32_Networking_NetworkListManager"
 ]

@@ -1,8 +1,9 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
+use std::borrow::Cow;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::str::FromStr;
-use std::thread;
+use std::sync::Arc;
 use std::time::Duration;
 use ascii::{AsciiStr};
 use bytes::Bytes;
@@ -11,13 +12,14 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
 use simd_json_derive::Deserialize;
 use thiserror::Error;
 use tokio::process::Command;
+use tokio::sync::Notify;
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 use crate::prelude::*;
 use crate::entity::*;
 use crate::retrying_client::RetryingClient;
 use fatal::*;
-use crate::updater::UpdateDns;
+use crate::updater::UpdaterError;
 
 macro_rules! patch_url {
     ($record_id:expr) => {
@@ -204,8 +206,9 @@ async fn run_ddns(client: &RetryingClient) -> MayPanic<()> {
 }
 
 fn real_main() -> ! {
-    let runtime = tokio::runtime::Runtime::new()
-        .expect("Failed to set up async context");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build().expect("Failed to set up async context");
 
     let client = RetryingClient::new();
 
@@ -213,12 +216,12 @@ fn real_main() -> ! {
         let mut interval = tokio::time::interval(Duration::from_secs(60 * 60)); // 1 hour
         interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-        let (tx, mut rx) = tokio::sync::watch::channel(UpdateDns);
-
-        runtime.spawn_blocking(move || {
-            drop(tx);
-            loop { thread::park() }
-        });
+        
+        let (shutdown_sender, mut shutdown_receiver) = 
+            tokio::sync::oneshot::channel::<UpdaterError>();
+        let notify = Arc::new(Notify::new());
+        
+        updater::subscribe(Arc::clone(&notify), shutdown_sender);
 
         loop {
             let run = || async {
@@ -234,21 +237,21 @@ fn real_main() -> ! {
                     Ok(()) => dbg_println!("successfully updated")
                 }
             };
-
-            dbg_println!("We ran!");
-
             tokio::select! {
-                res = rx.changed() => match res {
-                    Ok(()) => interval.reset_immediately(),
-                    Err(_) => {
-                        runtime.spawn_blocking(|| err("update task died"));
-                        loop {
-                            interval.tick().await;
-                            run().await
-                        }
+                _ = notify.notified() => interval.reset_immediately(),
+                _ = interval.tick() => run().await,
+                res = &mut shutdown_receiver => {
+                    let msg = match res {
+                        Ok(err) => format!("{err}").into(),
+                        Err(_) => Cow::from("update task died unexpectedly")
+                    };
+                    
+                    runtime.spawn_blocking(move || err(&msg));
+                    loop {
+                        interval.tick().await;
+                        run().await
                     }
-                },
-                _ = interval.tick() => run().await
+                }
             }
         }
     })

@@ -24,7 +24,8 @@ pub trait SimdJsonCompat {
 
 impl SimdJsonCompat for Response {
     async fn simd_json<T: for<'de> Deserialize<'de>>(self) -> Result<T, JsonError> {
-        let mut bytes = Vec::from(self.bytes().await?);
+        let bytes = self.bytes().await?;
+        let mut bytes = Vec::from(bytes);
 
         T::from_slice(&mut bytes).map_err(JsonError::Deserialize)
     }

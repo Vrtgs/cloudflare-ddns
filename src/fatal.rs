@@ -76,7 +76,7 @@ macro_rules! err {
 #[macro_export]
 macro_rules! dbg_println {
     ($($arg:tt)*) => {
-        if cfg!(debug_assertions) { println!($($arg)*) }
+        if cfg!(debug_assertions) { eprintln!($($arg)*) }
     };
 }
 
@@ -85,7 +85,7 @@ pub type MayPanic<T> = Result<T, Panic>;
 
 
 /// # Safety:
-///   `err_msg`: has to be a valid aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
+///   `err_msg`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
 #[cfg(windows)]
 #[cold]
 #[inline(never)]
@@ -145,11 +145,11 @@ pub fn panic_err(err_msg: &str) -> ! {
 
     let handled: HandledPanic;
     #[cfg(not(debug_assertions))]
-    { handled = HandledPanic; }
+    { handled = HandledPanic {}; }
     #[cfg(debug_assertions)]
     { handled = HandledPanic { message: Box::from(err_msg)} }
 
-    std::panic::panic_any(handled)
+    std::panic::resume_unwind(Box::new(handled))
 }
 
 
@@ -164,7 +164,7 @@ pub unsafe fn panic_err_utf16(err_msg: PCWSTR) -> ! {
 
     let handled: HandledPanic;
     #[cfg(not(debug_assertions))]
-    { handled = HandledPanic; }
+    { handled = HandledPanic {}; }
     #[cfg(debug_assertions)]
     {
         handled = HandledPanic {
@@ -172,7 +172,7 @@ pub unsafe fn panic_err_utf16(err_msg: PCWSTR) -> ! {
         }
     }
 
-    std::panic::panic_any(handled)
+    std::panic::resume_unwind(Box::new(handled))
 }
 
 pub fn set_hook() {
