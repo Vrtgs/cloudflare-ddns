@@ -1,9 +1,9 @@
 use std::convert::Infallible;
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
 use std::panic::UnwindSafe;
+use std::sync::Arc;
 use std::thread;
 use tokio::runtime::Handle;
+use tokio::sync::Semaphore;
 use windows::core::{PCWSTR};
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONASTERISK, MB_ICONERROR, MB_OK, MessageBoxW};
 
@@ -57,18 +57,19 @@ macro_rules! assert {
 #[macro_export]
 macro_rules! err {
     ($err_msg:literal, $code:literal) => {
-        Box::new(move ||
+        ::std::boxed::Box::new(move ||
             #[allow(unreachable_code)]
             // wide_str returns a valid pointer to a constant null-terminated string of 16-bit Unicode characters
             unsafe { panic_err_utf16(wide_str!(concat!($err_msg, "; Error code: ", $code))) }
-                as std::convert::Infallible
+                as ::core::convert::Infallible
         ) as Panic
     };
-    (f!$err_msg:literal, $code:literal) => {
-        Box::new({
-            let msg = format!($err_msg) + concat!("; Error code: ", $code);
+    (f!$err_msg:literal, $code:literal) => { $crate::err!(f!($err_msg), $code) };
+    (f!($($err_msg:tt)*), $code:literal) => {
+        ::std::boxed::Box::new({
+            let msg = format!($($err_msg)*) + concat!("; Error code: ", $code);
             #[allow(unreachable_code)]
-            move || panic_err(&msg) as std::convert::Infallible
+            move || panic_err(&msg) as ::core::convert::Infallible
         }) as Panic
     };
 }
@@ -80,22 +81,50 @@ macro_rules! dbg_println {
     };
 }
 
-pub type Panic = Box<dyn 'static + UnwindSafe + FnOnce() -> Infallible>;
+pub type Panic = Box<dyn 'static + UnwindSafe + Send + FnOnce() -> Infallible>;
 pub type MayPanic<T> = Result<T, Panic>;
 
 
+fn encode_pcwstr(str: &str) -> Vec<u16> {
+    str.encode_utf16().chain([0u16]).collect::<Vec<u16>>()
+}
+
+fn spawn_thread(fun: impl FnOnce() + Send + 'static) {
+    let handle = Handle::try_current();
+    match handle {
+        Ok(handle) => { handle.spawn_blocking(fun); },
+        Err(_) => { thread::spawn(fun); }
+    }
+}
+
 /// # Safety:
-///   `err_msg`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
+///   `err`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
 #[cfg(windows)]
 #[cold]
 #[inline(never)]
-pub unsafe fn err_utf16(err_msg: PCWSTR) {
+pub unsafe fn err_utf16(err: PCWSTR) {
     unsafe {
         MessageBoxW(
             None,
-            err_msg,
+            err,
             wide_str!("CloudFlare DDNS Error"),
             MB_OK | MB_ICONERROR
+        );
+    }
+}
+
+/// # Safety:
+///   `warning`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
+#[cfg(windows)]
+#[cold]
+#[inline(never)]
+pub unsafe fn warn_utf16(warning: PCWSTR) {
+    unsafe {
+        MessageBoxW(
+            None,
+            warning,
+            wide_str!("CloudFlare DDNS Warning"),
+            MB_OK | MB_ICONASTERISK
         );
     }
 }
@@ -104,37 +133,16 @@ pub unsafe fn err_utf16(err_msg: PCWSTR) {
 #[cold]
 #[inline(never)]
 pub fn warn(warning: &str) {
-    let warning = warning.encode_utf16()
-        .chain(std::iter::once(0u16))
-        .collect::<Vec<_>>();
-
-    let fun = move || {
-        unsafe {
-            MessageBoxW(
-                None,
-                PCWSTR::from_raw(warning.as_ptr()),
-                wide_str!("CloudFlare DDNS Error"),
-                MB_OK | MB_ICONASTERISK
-            );
-        }
-    };
-
-    let handle = Handle::try_current();
-    match handle {
-        Ok(handle) => { handle.spawn_blocking(fun); },
-        Err(_) => { thread::spawn(fun); }
-    }
+    let warning = encode_pcwstr(warning);
+    unsafe { warn_utf16(PCWSTR::from_raw(warning.as_ptr())) }
 }
 
 #[cfg(windows)]
 #[cold]
 #[inline(never)]
 pub fn err(err: &str) {
-    let err_msg = err.encode_utf16()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-
-    unsafe { err_utf16(PCWSTR::from_raw(err_msg.as_ptr())) }
+    let err = encode_pcwstr(err);
+    unsafe { err_utf16(PCWSTR::from_raw(err.as_ptr())) }
 }
 
 #[cfg(windows)]
@@ -145,34 +153,20 @@ pub fn panic_err(err_msg: &str) -> ! {
 
     let handled: HandledPanic;
     #[cfg(not(debug_assertions))]
-    { handled = HandledPanic {}; }
+    { handled = HandledPanic {  }; }
     #[cfg(debug_assertions)]
     { handled = HandledPanic { message: Box::from(err_msg)} }
 
     std::panic::resume_unwind(Box::new(handled))
 }
 
-
-/// # Safety:
-///   see [`err_utf16`]
-#[allow(unused)]
-#[cfg(windows)]
-#[cold]
-#[inline(never)]
-pub unsafe fn panic_err_utf16(err_msg: PCWSTR) -> ! {
-    err_utf16(err_msg);
-
-    let handled: HandledPanic;
-    #[cfg(not(debug_assertions))]
-    { handled = HandledPanic {}; }
-    #[cfg(debug_assertions)]
-    {
-        handled = HandledPanic {
-            message: Box::from(&*OsString::from_wide(err_msg.as_wide()).to_string_lossy()),
-        }
+pub async fn spawn_message_box(semaphore: Arc<Semaphore>, err: impl FnOnce() + Send + 'static) {
+    if let Ok(permit) = semaphore.acquire_owned().await {
+        spawn_thread(move || {
+            err();
+            drop(permit);
+        });
     }
-
-    std::panic::resume_unwind(Box::new(handled))
 }
 
 pub fn set_hook() {
@@ -184,9 +178,7 @@ pub fn set_hook() {
                     None => try_cast!($($rest),* |> $default),
                 }
             };
-            (|> $default: expr) => {
-                $default
-            };
+            (|> $default: expr) => { $default };
         }
 
         let msg: &str = match info.payload().downcast_ref::<HandledPanic>() {

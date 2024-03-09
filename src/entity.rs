@@ -1,26 +1,24 @@
+use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
+use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 use std::ops::Deref;
-use simd_json::Node;
-use simd_json_derive::{Deserialize, Tape};
+use serde::{Deserialize, Deserializer};
+use serde::de::{SeqAccess, Visitor};
 
 
 pub struct OwnedStr(Box<str>);
 
-impl<'input> Deserialize<'input> for OwnedStr {
-    fn from_tape(tape: &mut Tape<'input>) -> simd_json::Result<Self> where Self: Sized + 'input {
-        match tape.next() {
-            Some(Node::String(s)) => Ok(Self(Box::from(s))),
-            _ => Err(simd_json::Error::generic(
-                simd_json::ErrorType::ExpectedString
-            )),
-        }
+impl<'de> Deserialize<'de> for OwnedStr {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        String::deserialize(deserializer).map(String::into_boxed_str).map(OwnedStr)
     }
 }
 impl Deref for OwnedStr {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        Box::deref(&self.0)
+        &*self.0
     }
 }
 
@@ -52,14 +50,39 @@ pub enum OneOrLen<T> {
 }
 
 impl<'input, T: Deserialize<'input>> Deserialize<'input> for OneOrLen<T> {
-    fn from_tape(tape: &mut Tape<'input>) -> simd_json::Result<Self> where Self: Sized + 'input {
-        match tape.next() {
-            Some(Node::Array { len: 1, .. }) => T::from_tape(tape).map(OneOrLen::One),
-            Some(Node::Array { len, .. }) => Ok(OneOrLen::Len(len)),
-            _ => Err(simd_json::Error::generic(
-                simd_json::ErrorType::ExpectedArray
-            ))
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'input> {
+        struct OneOrLenVisitor<T> {
+            marker: PhantomData<T>,
         }
+
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for OneOrLenVisitor<T> {
+            type Value = OneOrLen<T>;
+
+            fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
+                formatter.write_str("a sequence")
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut last_element: Option<(NonZeroUsize, T)> = None;
+                while let Some(element) = seq.next_element::<T>()? {
+                    last_element = match last_element {
+                        None => Some((NonZeroUsize::MIN, element)),
+                        Some((cnt, _)) => Some((cnt.saturating_add(1), element))
+                    };
+                }
+                
+                match last_element {
+                    Some((cnt, element)) if cnt.get() == 1 => Ok(OneOrLen::One(element)),
+                    Some((cnt, _)) => Ok(OneOrLen::Len(cnt.get())),
+                    None => Ok(OneOrLen::Len(0))
+                }
+            }
+        }
+
+        let visitor = OneOrLenVisitor {
+            marker: PhantomData,
+        };
+        deserializer.deserialize_seq(visitor)
     }
 }
 

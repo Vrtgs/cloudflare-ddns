@@ -6,14 +6,13 @@
 use std::convert::Infallible;
 use std::marker::{PhantomData, PhantomPinned};
 use std::pin::{Pin, pin};
-use std::sync::Arc;
 use std::thread;
-use tokio::sync::Notify;
-use tokio::sync::oneshot::Sender as OnsShotSender;
 use windows::core::{GUID, implement, Interface};
 use windows::Win32::System::Com;
 use windows::Win32::Networking::NetworkListManager::{INetworkEvents, INetworkEvents_Impl, INetworkListManager, NetworkListManager, NLM_CONNECTIVITY, NLM_CONNECTIVITY_IPV4_INTERNET, NLM_CONNECTIVITY_IPV6_INTERNET, NLM_NETWORK_PROPERTY_CHANGE};
 use windows::core::Result as WinResult;
+use windows::Win32::Foundation::VARIANT_BOOL;
+use crate::panic_channel::{Updater, UpdatersManager};
 
 #[derive(thiserror::Error, Debug)]
 pub enum UpdaterError {
@@ -58,14 +57,13 @@ impl Drop for ComGuard {
 }
 
 
-struct InternetUpdateWatcher<'a> {
+struct UpdateManager<'a> {
     advise_cookie_net: Option<u32>,
     cxn_point_net: Com::IConnectionPoint,
-    inner: UpdaterInner,
     _permit: Permit<'a>
 }
 
-impl<'a> Drop for InternetUpdateWatcher<'a> {
+impl<'a> Drop for UpdateManager<'a> {
     fn drop(&mut self) {
         if let Some(cookie) = self.advise_cookie_net.take() {
             unsafe { self.cxn_point_net.Unadvise(cookie) }.map_err(UpdaterError::Unadvise).unwrap();
@@ -73,12 +71,14 @@ impl<'a> Drop for InternetUpdateWatcher<'a> {
     }
 }
 
-pub fn subscribe(notify: Arc<Notify>, shutdown_sender: OnsShotSender<UpdaterError>) {
+pub fn subscribe(updaters_manager: &mut UpdatersManager) {
+    let updater: Updater = updaters_manager.add_updater("network-listener");
     tokio::task::spawn_blocking(move || {
         #[inline(always)]
-        fn inner(notify: Arc<Notify>) -> Result<Infallible, UpdaterError> {
+        fn inner(notify_callback: &dyn Fn()) -> Result<Infallible, UpdaterError> {
             let com_guard = ComGuard::new()?;
             let com_guard = pin!(com_guard);
+            let com_guard = com_guard.as_ref();
 
             let network_list_manager: INetworkListManager =
                 unsafe { Com::CoCreateInstance(&NetworkListManager, None, Com::CLSCTX_ALL) }
@@ -88,15 +88,17 @@ pub fn subscribe(notify: Arc<Notify>, shutdown_sender: OnsShotSender<UpdaterErro
             let cxn_point_net =
                 unsafe { cpc.FindConnectionPoint(&INetworkEvents::IID) }.map_err(UpdaterError::Listening)?;
 
-            let mut this = InternetUpdateWatcher {
+            let mut this = UpdateManager {
                 advise_cookie_net: None,
                 cxn_point_net,
-                inner: UpdaterInner { notify },
-                _permit: com_guard.as_ref().get_permit(),
+                _permit: com_guard.get_permit(),
             };
 
-            let callbacks: INetworkEvents = this.inner.clone().into();
-
+            let callbacks: INetworkEvents = UpdaterInner { 
+                notify_callback,
+                _permit: com_guard.get_permit()
+            }.into();
+            
             this.advise_cookie_net = Some(
                 unsafe { this.cxn_point_net.Advise(&callbacks) }.map_err(UpdaterError::Listening)?
             );
@@ -104,22 +106,33 @@ pub fn subscribe(notify: Arc<Notify>, shutdown_sender: OnsShotSender<UpdaterErro
             loop { thread::park() }
         }
         
-        match inner(notify) {
+        match inner(&|| updater.update()) {
             Ok(x) => match x {  }
-            Err(err) => shutdown_sender.send(err)
+            Err(err) => updater.shutdown(err)
         }
     });
 }
 
+pub fn has_internet() -> bool {
+    thread_local! {
+        static NETWORK_MANGER: INetworkListManager = 
+            unsafe { Com::CoCreateInstance(&NetworkListManager, None, Com::CLSCTX_ALL) }
+                .expect("Unable to get an instance of INetworkListManager");
+    }
+    
+    NETWORK_MANGER.with(|x| unsafe { x.IsConnectedToInternet() })
+        .map(VARIANT_BOOL::as_bool)
+        .unwrap_or(false)
+}
 
 #[implement(INetworkEvents)]
-#[derive(Clone)]
-struct UpdaterInner {
-    notify: Arc<Notify>,
+struct UpdaterInner<'a> {
+    notify_callback: &'a dyn Fn(),
+    _permit: Permit<'a>
 }
 
 #[allow(non_snake_case)]
-impl INetworkEvents_Impl for UpdaterInner {
+impl<'a> INetworkEvents_Impl for UpdaterInner<'a> {
     fn NetworkAdded(&self, _: &GUID) -> WinResult<()> {
         Ok(())
     }
@@ -134,9 +147,8 @@ impl INetworkEvents_Impl for UpdaterInner {
             | NLM_CONNECTIVITY_IPV6_INTERNET.0;
         
         let has_internet = (new_connectivity.0 & HAS_INTERNET_MASK) != 0;
-        if has_internet { 
-            self.notify.notify_waiters();
-        }
+        if has_internet { (self.notify_callback)() }
+        
         Ok(())
     }
 
