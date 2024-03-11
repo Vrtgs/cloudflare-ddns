@@ -13,14 +13,14 @@ use wasmtime::{Config, Engine, EngineWeak, Error, Linker, Module, OptLevel, Prof
 use wasmtime::component::__internal::anyhow;
 use crate::config::dns_source::wasm::pipe::ReadWritePipe;
 
-pub struct DdnsStep {
+pub struct WasmDdnsStep {
     stdout_pipe: ReadWritePipe,
     stdin_pipe: ReadWritePipe,
     store: Mutex<Store<WasiCtx>>,
     main: TypedFunc<u32, u32>
 }
 
-impl DdnsStep {
+impl WasmDdnsStep {
     pub async fn new(module_path: impl AsRef<Path>) -> Result<Self, Error> {
         Self::_new(module_path.as_ref(), &ENGINE).await
     }

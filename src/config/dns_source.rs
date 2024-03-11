@@ -4,7 +4,7 @@ use reqwest::Url;
 use serde::de::Error as _;
 use serde_json::{Map, Value};
 use thiserror::Error;
-use crate::config::dns_source::wasm::DdnsStep;
+use crate::config::dns_source::wasm::WasmDdnsStep;
 use crate::entity::{OwnedBytes, OwnedStr};
 
 mod wasm;
@@ -21,7 +21,7 @@ enum ProcessStep {
     Json { ip_key: OwnedStr },
     
     /// parses the current data based on a wasm parser
-    WasmTransform { step: DdnsStep }
+    WasmTransform { step: WasmDdnsStep }
 }
 
 struct Process {
