@@ -1,5 +1,7 @@
 [build]
-rustflags = ["-C", "target-cpu=native"]
-
-[target.'cfg(windows)']
-rustflags = ["-C", "target-cpu=native", "-C", "target-feature=+crt-static"]
+rustflags = [
+    "-C", "target-cpu=native",
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=-fuse-ld=lld",
+    "-Z", "threads=24"
+]

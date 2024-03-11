@@ -29,6 +29,7 @@ pub enum UpdaterError {
 
 struct Permit<'a>(PhantomData<Pin<&'a ComGuard>>);
 
+#[clippy::has_significant_drop]
 struct ComGuard {
     _pinned: PhantomPinned,
     _unsend_unsync: PhantomData<*const ()>
@@ -76,8 +77,7 @@ pub fn subscribe(updaters_manager: &mut UpdatersManager) {
     tokio::task::spawn_blocking(move || {
         #[inline(always)]
         fn inner(notify_callback: &dyn Fn()) -> Result<Infallible, UpdaterError> {
-            let com_guard = ComGuard::new()?;
-            let com_guard = pin!(com_guard);
+            let com_guard = pin!(ComGuard::new()?);
             let com_guard = com_guard.as_ref();
 
             let network_list_manager: INetworkListManager =
