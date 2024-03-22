@@ -1,20 +1,21 @@
+#![feature(addr_parse_ascii)]
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
-use std::net::{AddrParseError, Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use ascii::{AsciiStr};
 use bytes::Bytes;
 use futures::future::select_ok;
-use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
-use thiserror::Error;
+use futures::FutureExt;
+use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use tokio::sync::Semaphore;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
 use crate::prelude::*;
 use crate::entity::*;
 use crate::retrying_client::RetryingClient;
 use fatal::*;
+use crate::config::{CONFIG, GetIpError};
 use crate::network_listener::has_internet;
 use crate::panic_channel::{UpdaterEvent, UpdatersManager};
 
@@ -49,27 +50,6 @@ const GET_URL: &str = concat!(
 );
 
 
-macro_rules! dyn_array {
-    (const $name: ident: [$ty:ty] = [$($domain: expr),* $(,)?];) => {
-        const $name: [$ty; { ::count_tts::count_tts!($($domain)*) }] = [$($domain),*];
-    };
-}
-
-dyn_array! {
-    const IP_CHECK_DOMAINS: [&str] = [
-        "https://checkip.amazonaws.com/",
-        "https://api.ipify.org/",
-        "https://ipv4.icanhazip.com/",
-        "https://4.ident.me/",
-        "https://v4.tnedi.me/",
-        "https://v4.ipv6-test.com/api/myip.php",
-        "https://myip.dnsomatic.com/",
-        "https://ipinfo.io/ip",
-        "https://ipv4.nsupdate.info/myip",
-        "https://dynamic.zoneedit.com/checkip.html",
-    ];
-}
-
 mod prelude;
 mod entity;
 mod retrying_client;
@@ -77,16 +57,8 @@ mod fatal;
 mod network_listener;
 mod panic_channel;
 mod config;
+mod util;
 
-#[derive(Debug, Error)]
-enum GetIPError {
-    #[error(transparent)]
-    Reqwest(#[from] reqwest::Error),
-    #[error(transparent)]
-    Ipv4Parse(#[from] AddrParseError),
-    #[error("invalid data returned")]
-    InvalidResponse
-}
 
 struct DdnsContext {
     client: RetryingClient,
@@ -95,18 +67,10 @@ struct DdnsContext {
 }
 
 impl DdnsContext {
-    async fn get_ip(client: RetryingClient) -> Result<Ipv4Addr, GetIPError> {
-        let iter = IP_CHECK_DOMAINS
-            .map(|s| client.get(s).header(ACCEPT, HeaderValue::from_static("text/plain")).send())
-            .map(|fut| Box::pin(async {
-                let ip = fut.await?.bytes().await?;
-                if ip.len() > "xxx.xxx.xxx.xxx".len() { return Err(GetIPError::InvalidResponse) }
-
-                let Ok(str) = AsciiStr::from_ascii(&ip)
-                    else { return Err(GetIPError::InvalidResponse) };
-
-                Ok(Ipv4Addr::from_str(str.as_str())?)
-            }));
+    async fn get_ip(client: RetryingClient) -> Result<Ipv4Addr, GetIpError> {
+        let cfg = CONFIG.read().await;
+        let iter = cfg.ip_sources.iter()
+            .map(|x| Box::pin(x.resolve_ip(&client)));
 
         select_ok(iter).await.map(|(ip, _)|ip)
     }
@@ -114,13 +78,13 @@ impl DdnsContext {
     async fn get_record(&self) -> reqwest::Result<OneOrLen<Record>> {
         Ok(
             self.client.get(GET_URL)
-            .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
-            .header(AUTHORIZATION_KEY, AUTH_KEY)
-            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-            .send().await?
-            .json::<GetResponse>()
-            .await?
-            .result
+                .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
+                .header(AUTHORIZATION_KEY, AUTH_KEY)
+                .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+                .send().await?
+                .json::<GetResponse>()
+                .await?
+                .result
         )
     }
 
@@ -205,7 +169,7 @@ fn new_interval_at(start: Instant, period: Duration) -> Interval {
     interval
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn real_main() -> ! {
     let ctx = DdnsContext {
         client: RetryingClient::new(),
@@ -255,9 +219,9 @@ fn main() -> ! {
     set_hook();
     loop {
         let _ = match std::panic::catch_unwind(real_main) {
-            // should be handled by the panic hook
             Ok(never) => never,
             
+            // should be handled by the panic hook
             Err(e) => e
         };
     }

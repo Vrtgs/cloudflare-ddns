@@ -12,6 +12,7 @@ pub enum UpdaterEvent {
 }
 
 pub enum UpdaterExitStatus {
+    Success { name: & 'static str },
     Panic { name: & 'static str },
     Error { name: & 'static str, err: Box<dyn Error + Send> }
 }
@@ -19,6 +20,8 @@ pub enum UpdaterExitStatus {
 impl Display for UpdaterExitStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match *self {
+            UpdaterExitStatus::Success { name } =>
+                write!(f, "updater <{name}> successfully exited"),
             UpdaterExitStatus::Panic { name } =>
                 write!(f, "updater <{name}> died unexpectedly"),
             
@@ -47,7 +50,7 @@ impl UpdatersManager {
                 let state = state
                     .expect("we always hold at least one sender, and we never close");
                 
-                let (E::Error{ name, .. }|E::Panic { name, .. }) = state;
+                let (E::Error{name,..}|E::Panic{name}|E::Success{name}) = state;
                 assert!(self.active_services.remove(name), "updater returned an invalid name");
                 
                 UpdaterEvent::ServiceExited(state)
@@ -76,6 +79,11 @@ pub struct Updater {
 impl Updater {
     #[inline(always)]
     pub fn update(&self) { self.notifier.notify_waiters() }
+
+    pub fn exit(mut self) {
+        let snd = self.snd.take().unwrap();
+        let _ = snd.send(UpdaterExitStatus::Success { name: self.name });
+    }
     
     pub fn shutdown(self, err: impl Error + Send + 'static) {
         self.shutdown_box(Box::new(err))
