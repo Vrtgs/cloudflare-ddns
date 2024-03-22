@@ -75,9 +75,8 @@ impl Process {
 
                     bytes = val.into()
                 }
-                S::WasmTransform { module } => bytes = 
-                    with_wasm_driver!(async |x| x.run(&**module, bytes).await).await?
-                        .into()
+                S::WasmTransform { module } => bytes =
+                    with_wasm_driver!(async |x| x.run(&**module, bytes).await).await?.into()
             }
         }
 

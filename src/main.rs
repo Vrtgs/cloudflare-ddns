@@ -17,7 +17,7 @@ use crate::retrying_client::RetryingClient;
 use fatal::*;
 use crate::config::{CONFIG, GetIpError};
 use crate::network_listener::has_internet;
-use crate::panic_channel::{UpdaterEvent, UpdatersManager};
+use crate::updaters::{UpdaterEvent, UpdatersManager};
 
 macro_rules! patch_url {
     ($record_id:expr) => {
@@ -55,7 +55,7 @@ mod entity;
 mod retrying_client;
 mod fatal;
 mod network_listener;
-mod panic_channel;
+mod updaters;
 mod config;
 mod util;
 

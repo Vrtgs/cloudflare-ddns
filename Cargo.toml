@@ -26,7 +26,7 @@ serde                = { version = "1.0.197", features = ["derive", "rc"] }
 mimalloc             = { version = "0.1.39", default-features = false }
 simdutf8             = { version = "0.1.4", features = ["aarch64_neon", "aarch64_neon_prefetch"] }
 simd-json            = { version = "0.13.9", features = ["ahash"] }
-toml                 = { version = "0.8.12", features = ["preserve_order"] }
+toml                 = "0.8.12"
 serde_json           = "1.0.114"
 heap-array           = "0.1.7"
 bytes                = "1.5.0"

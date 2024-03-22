@@ -12,7 +12,7 @@ use windows::Win32::System::Com;
 use windows::Win32::Networking::NetworkListManager::{INetworkEvents, INetworkEvents_Impl, INetworkListManager, NetworkListManager, NLM_CONNECTIVITY, NLM_CONNECTIVITY_IPV4_INTERNET, NLM_CONNECTIVITY_IPV6_INTERNET, NLM_NETWORK_PROPERTY_CHANGE};
 use windows::core::Result as WinResult;
 use windows::Win32::Foundation::VARIANT_BOOL;
-use crate::panic_channel::{Updater, UpdatersManager};
+use crate::updaters::{Updater, UpdatersManager};
 
 #[derive(thiserror::Error, Debug)]
 pub enum UpdaterError {

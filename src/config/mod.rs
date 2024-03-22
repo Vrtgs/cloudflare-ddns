@@ -9,7 +9,7 @@ mod listener;
 
 
 pub struct Config {
-    pub ip_sources: Arc<[IpSource]>
+    pub ip_sources: Sources
 }
 
 

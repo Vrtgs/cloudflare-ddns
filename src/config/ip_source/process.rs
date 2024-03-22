@@ -1,18 +1,22 @@
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter, Write};
+use std::future::Future;
 use std::net::Ipv4Addr;
 use std::ops::Deref;
 use tokio::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use serde_json::{Deserializer as JsonDeserializer};
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::de::{Error, SeqAccess, Visitor};
+use serde::de::{Error, MapAccess, SeqAccess, Visitor};
 use toml::map::Map;
 use toml::Value;
 use url::Url;
 use anyhow::Result;
+use bytes::Bytes;
+use serde_json::de::SliceRead;
 use crate::config::GetIpError;
+use crate::config::ip_source::wasm::with_wasm_driver;
 use crate::retrying_client::RetryingClient;
 use crate::util::num_cpus;
 
@@ -111,14 +115,81 @@ enum ProcessStep {
     WasmTransform { module: Box<Path> }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Process {
     #[serde(rename = "step")]
-    steps: Arc<[ProcessStep]>
+    steps: Box<[ProcessStep]>
 }
 
-#[derive(Clone)]
-struct Sources {
+fn get_json_key(json: &[u8], key: &str) -> serde_json::Result<serde_json::Value> {
+    let mut deserializer = JsonDeserializer::new(SliceRead::new(json));
+
+    struct JsonVisitor<'a> {
+        key: &'a str
+    }
+
+    impl<'de> Visitor<'de> for JsonVisitor<'de> {
+        type Value = serde_json::Value;
+
+        fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+            write!(formatter, "a json with a field {}", self.key)
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+            let mut val = None;
+
+            while let Some((key, value)) = map.next_entry::<&str, serde_json::Value>()? {
+                if val.is_none() && key == self.key {
+                    val = Some(value);
+                }
+            }
+
+            val.ok_or_else(|| Error::custom(format_args!("missing field `{}`", self.key)))
+        }
+    }
+
+    deserializer.deserialize_map(JsonVisitor { key })
+}
+
+
+impl Process {
+    async fn run(&self, mut bytes: Bytes) -> Result<Ipv4Addr, GetIpError> {
+        use ProcessStep as S;
+        for step in &*self.steps {
+            match step {
+                S::Plaintext => { simdutf8::basic::from_utf8(&bytes)?; },
+                S::Strip { prefix, suffix } => {
+                    if let Some(prefix) = prefix {
+                        if bytes.starts_with(prefix) {
+                            bytes = bytes.split_off(prefix.len());
+                        }
+                    }
+
+                    if let Some(suffix) = suffix {
+                        if bytes.ends_with(suffix) {
+                            bytes.truncate(bytes.len() - suffix.len())
+                        }
+                    }
+                }
+                S::Json { key } => {
+                    let val = match get_json_key(&bytes, key)? {
+                        serde_json::Value::String(str) => str,
+                        val => format!("{val}"),
+                    };
+
+                    bytes = val.into()
+                }
+                S::WasmTransform { module } => bytes =
+                    with_wasm_driver!(async |x| x.run(&**module, bytes).await).await?
+                        .into()
+            }
+        }
+
+        Ok(Ipv4Addr::parse_ascii(&bytes)?)
+    }
+}
+
+pub struct Sources {
     sources: BTreeMap<Url, Process>
 }
 
@@ -141,19 +212,19 @@ impl ProcessIntermediate {
         
         let steps = futures::stream::iter(self.steps)
             .map(|step| async move {
-                use ProcessStep::*;
+                use ProcessStep as S;
                 match step {
-                    step @ (Json{..}|Plaintext) => Some(Ok(step)),
-                    Strip { prefix, suffix } => {
+                    step @ (S::Json{..}|S::Plaintext) => Some(Ok(step)),
+                    S::Strip { prefix, suffix } => {
                         match (&prefix, &suffix) {
                             (None, None) => None,
-                            _ => Some(Ok(Strip { prefix, suffix }))
+                            _ => Some(Ok(S::Strip { prefix, suffix }))
                         }
                     }
-                    WasmTransform { module } => {
+                    S::WasmTransform { module } => {
                         let step = tokio::fs::canonicalize(module).await
                             .map(PathBuf::into_boxed_path)
-                            .map(|module| WasmTransform { module });
+                            .map(|module| S::WasmTransform { module });
                         Some(step)
                     }
                 }
@@ -165,7 +236,8 @@ impl ProcessIntermediate {
         steps.map(|steps| Process { steps: steps.into() })
     }
 }
-impl<'de> Sources {
+
+impl Sources {
     async fn deserialize_async(text: &str) -> Result<Self> {
         #[derive(Deserialize)]
         struct SourcesToml {
@@ -183,6 +255,24 @@ impl<'de> Sources {
             .try_collect::<BTreeMap<Url, Process>>().await
             .map(|sources| Sources { sources })
     }
+    
+    fn sources(&self) -> impl Iterator<Item=IpSource<'_>> {
+        self.sources.iter()
+            .map(|(url, process)| IpSource { url, process })
+    }
+}
+
+pub struct IpSource<'a> {
+    pub url: &'a Url,
+    pub process: &'a Process
+}
+
+
+impl<'a> IpSource<'a> {
+    pub async fn resolve_ip(&self, client: &RetryingClient) -> Result<Ipv4Addr, GetIpError> {
+        let bytes = client.get(self.url.clone()).send().await?.bytes().await?;
+        self.process.run(bytes).await
+    }
 }
 
 impl Debug for Sources {
@@ -190,24 +280,5 @@ impl Debug for Sources {
         f.debug_map()
             .entries(self.sources.iter().map(|(url, p)| (url.as_str(), p)))
             .finish()
-    }
-}
-
-pub struct IpSource {
-    pub url: Url,
-    pub process: crate::config::ip_source::Process
-}
-
-
-impl IpSource {
-    pub fn new(url: Url, process: crate::config::ip_source::Process) -> Self {
-        Self { url, process }
-    }
-
-    pub async fn resolve_ip(&self, client: &RetryingClient) -> std::result::Result<Ipv4Addr, GetIpError> {
-        let bytes = client.get(self.url.clone())
-            .send().await?.bytes().await?;
-
-        self.process.run(bytes).await
     }
 }
