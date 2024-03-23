@@ -39,6 +39,12 @@ pub struct UpdatersManager {
 }
 
 impl UpdatersManager {
+    #[inline(always)]
+    pub fn new() -> Self {
+        let (snd, rcv) =
+            tokio::sync::mpsc::unbounded_channel();
+        UpdatersManager { rcv, snd, notifier: Arc::new(Notify::new()), active_services: HashSet::new() }
+    }
     
     /// watches for service changes
     pub async fn watch(&mut self) -> UpdaterEvent {
@@ -100,14 +106,5 @@ impl Drop for Updater {
         if let Some(snd) = self.snd.take() {
             let _ = snd.send(UpdaterExitStatus::Panic { name: self.name });
         }
-    }
-}
-
-impl UpdatersManager {
-    #[inline(always)]
-    pub fn new() -> Self {
-        let (snd, rcv) =
-            tokio::sync::mpsc::unbounded_channel();
-        UpdatersManager { rcv, snd, notifier: Arc::new(Notify::new()), active_services: HashSet::new() }
     }
 }

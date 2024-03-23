@@ -176,7 +176,7 @@ async fn real_main() -> ! {
         errors_semaphore: Arc::new(Semaphore::new(5)),
         warning_semaphore: Arc::new(Semaphore::new(5)),
     };
-    
+
     let mut interval = new_interval(Duration::from_secs(60 * 60)); // 1 hour
     let mut updaters_manager = UpdatersManager::new();
     
