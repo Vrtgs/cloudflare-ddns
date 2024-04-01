@@ -3,15 +3,18 @@
 // huge thx to
 // https://github.com/suryatmodulus/firezone/blob/7c296494bd96c34ef1c0be75285ff92566f4c12c/rust/gui-client/src-tauri/src/client/network_changes.rs
 
-use std::convert::Infallible;
+use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
-use std::pin::{Pin, pin};
-use std::thread;
+use std::pin::Pin;
+use tokio::runtime::Handle as TokioHandle;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use windows::core::{GUID, implement, Interface};
 use windows::Win32::System::Com;
 use windows::Win32::Networking::NetworkListManager::{INetworkEvents, INetworkEvents_Impl, INetworkListManager, NetworkListManager, NLM_CONNECTIVITY, NLM_CONNECTIVITY_IPV4_INTERNET, NLM_CONNECTIVITY_IPV6_INTERNET, NLM_NETWORK_PROPERTY_CHANGE};
 use windows::core::Result as WinResult;
 use windows::Win32::Foundation::VARIANT_BOOL;
+use crate::dbg_println;
 use crate::updaters::{Updater, UpdatersManager};
 
 #[derive(thiserror::Error, Debug)]
@@ -25,7 +28,6 @@ pub enum UpdaterError {
     #[error("Couldn't stop listening to network events: {0}")]
     Unadvise(windows::core::Error)
 }
-
 
 struct Permit<'a>(PhantomData<Pin<&'a ComGuard>>);
 
@@ -72,58 +74,93 @@ impl<'a> Drop for UpdateManager<'a> {
     }
 }
 
-pub fn subscribe(updaters_manager: &mut UpdatersManager) {
+macro_rules! get {
+    ($x: expr) => {
+        (($x).as_ref().unwrap_or_else(|err| panic!("Fatal win32 api error {err}")))
+    };
+}
+
+thread_local! {
+    static COM_GUARD: Result<Pin<Box<ComGuard>>, UpdaterError> = ComGuard::new().map(Box::pin);
+    
+    static NETWORK_MANGER: Result<INetworkListManager, UpdaterError> = {
+        COM_GUARD.with(|x| {
+            let _permit = get!(x).as_ref().get_permit();
+            unsafe { Com::CoCreateInstance(&NetworkListManager, None, Com::CLSCTX_ALL) }
+                .map_err(UpdaterError::CreateNetworkListManager)
+        })
+    }
+}
+
+#[must_use = "its useless to check if we have internet if you dont use it"]
+pub async fn has_internet() -> bool {
+    fn inner() -> bool {
+        NETWORK_MANGER.with(|x| unsafe {
+            get!(x).IsConnectedToInternet()
+        })
+            .map(VARIANT_BOOL::as_bool)
+            .unwrap_or(false)
+    }
+
+    tokio::task::spawn_blocking(inner)
+        .await.expect("internet check blocking task panicked")
+}
+
+fn listen<F: Fn(), S: Future>(notify_callback: F, shutdown: S) -> Result<S::Output, UpdaterError> {
+    COM_GUARD.with(move |com_guard| {
+        let com_guard = get!(com_guard).as_ref();
+
+        let cxn_point_net = NETWORK_MANGER.with(|network_list_manager| {
+            let cpc: Com::IConnectionPointContainer =
+                get!(network_list_manager).cast().map_err(UpdaterError::Listening)?;
+
+            unsafe { cpc.FindConnectionPoint(&INetworkEvents::IID) }
+                .map_err(UpdaterError::Listening)
+        })?;
+
+        let mut this = UpdateManager {
+            advise_cookie_net: None,
+            cxn_point_net,
+            _permit: com_guard.get_permit(),
+        };
+
+        let callbacks: INetworkEvents = UpdaterInner {
+            notify_callback: &notify_callback,
+            _permit: com_guard.get_permit()
+        }.into();
+
+        this.advise_cookie_net = Some(
+            unsafe { this.cxn_point_net.Advise(&callbacks) }.map_err(UpdaterError::Listening)?
+        );
+        
+        Ok(TokioHandle::current().block_on(shutdown))
+    })
+}
+
+pub fn subscribe(updaters_manager: &mut UpdatersManager) -> JoinHandle<()> {
     let updater: Updater = updaters_manager.add_updater("network-listener");
     tokio::task::spawn_blocking(move || {
-        #[inline(always)]
-        fn inner(notify_callback: &dyn Fn()) -> Result<Infallible, UpdaterError> {
-            let com_guard = pin!(ComGuard::new()?);
-            let com_guard = com_guard.as_ref();
-
-            let network_list_manager: INetworkListManager =
-                unsafe { Com::CoCreateInstance(&NetworkListManager, None, Com::CLSCTX_ALL) }
-                    .map_err(UpdaterError::CreateNetworkListManager)?;
-            let cpc: Com::IConnectionPointContainer =
-                network_list_manager.cast().map_err(UpdaterError::Listening)?;
-            let cxn_point_net =
-                unsafe { cpc.FindConnectionPoint(&INetworkEvents::IID) }.map_err(UpdaterError::Listening)?;
-
-            let mut this = UpdateManager {
-                advise_cookie_net: None,
-                cxn_point_net,
-                _permit: com_guard.get_permit(),
-            };
-
-            let callbacks: INetworkEvents = UpdaterInner { 
-                notify_callback,
-                _permit: com_guard.get_permit()
-            }.into();
-            
-            this.advise_cookie_net = Some(
-                unsafe { this.cxn_point_net.Advise(&callbacks) }.map_err(UpdaterError::Listening)?
-            );
-            
-            loop { thread::park() }
-        }
+        let local_notif = Notify::new();
         
-        match inner(&|| updater.update()) {
-            Ok(x) => match x {  }
-            Err(err) => updater.shutdown(err)
-        }
-    });
+        let notify_callback = || {
+            dbg_println!("Network Listener: got network update!");
+            if updater.update().is_err() {
+                local_notif.notify_waiters() 
+            }
+        };
+
+        let shutdown = async { 
+            tokio::select! {
+                _ = local_notif.notified() => (),
+                _ = updater.wait_shutdown() => ()
+            }
+        };
+
+        let res = listen(notify_callback, shutdown);
+        updater.exit(res)
+    })
 }
 
-pub fn has_internet() -> bool {
-    thread_local! {
-        static NETWORK_MANGER: INetworkListManager = 
-            unsafe { Com::CoCreateInstance(&NetworkListManager, None, Com::CLSCTX_ALL) }
-                .expect("Unable to get an instance of INetworkListManager");
-    }
-    
-    NETWORK_MANGER.with(|x| unsafe { x.IsConnectedToInternet() })
-        .map(VARIANT_BOOL::as_bool)
-        .unwrap_or(false)
-}
 
 #[implement(INetworkEvents)]
 struct UpdaterInner<'a> {
@@ -155,7 +192,7 @@ impl<'a> INetworkEvents_Impl for UpdaterInner<'a> {
     fn NetworkPropertyChanged(
         &self,
         _: &GUID,
-        _: NLM_NETWORK_PROPERTY_CHANGE,
+        _: NLM_NETWORK_PROPERTY_CHANGE
     ) -> WinResult<()> {
         Ok(())
     }

@@ -2,6 +2,7 @@ use std::num::NonZeroU8;
 use std::time::Duration;
 use reqwest::{Body, Client, ClientBuilder, IntoUrl, Method, Request, Response};
 use reqwest::header::{HeaderName, HeaderValue};
+use crate::dbg_println;
 
 
 pub struct RequestBuilder {
@@ -36,11 +37,27 @@ pub struct RetryingClient {
     client: Client
 }
 
+const MAX_RETRY: NonZeroU8 = match NonZeroU8::new(8) {
+    Some(s) => s,
+    None => std::panic!("Invalid MAX_RETRY")
+};
+
 impl RetryingClient {
     pub fn new() -> Self {
+        const TIMEOUT: Duration = Duration::from_secs((2 * 60) + 30); // 2.5 minutes
+
+        #[cfg(feature = "trace")]
+        const IDLE_TIMEOUT: Duration = Duration::new(0, 0);
+
+        #[cfg(not(feature = "trace"))]
+        const IDLE_TIMEOUT: Duration = match TIMEOUT.checked_mul(MAX_RETRY.get() as u32) {
+            Some(x) => x,
+            None => panic!("idle timeout too big")
+        };
+        
         ClientBuilder::new()
-            .timeout(Duration::from_secs(5 * 60))
-            .pool_idle_timeout(None)
+            .timeout(TIMEOUT)
+            .pool_idle_timeout(IDLE_TIMEOUT)
             .use_rustls_tls()
             .build()
             .map(|c| RetryingClient { client: c })
@@ -64,14 +81,9 @@ impl RetryingClient {
 
     /// See [`Client::execute`]
     pub async fn execute(&self, req: Request) -> reqwest::Result<Response> {
-        const MAX_RETRY: NonZeroU8 = match NonZeroU8::new(8) {
-            Some(s) => s,
-            None => std::panic!("Invalid MAX_RETRY")
-        };
-
         let mut i = 0_u8;
         loop {
-            if i >= MAX_RETRY.get() - 1 { break }
+            if i >= (MAX_RETRY.get() - 1) { break }
 
             if let Some(req) = req.try_clone() {
                 match self.client.execute(req).await {
@@ -80,7 +92,7 @@ impl RetryingClient {
                         Duration::from_secs(45 * (i/2).max(1) as u64)
                     ).await,
                 }
-            } else { #[cfg(debug_assertions)] println!("tried to use a streaming request") }
+            } else { break dbg_println!("tried to use a streaming request") }
 
             i += 1
         }

@@ -1,23 +1,33 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #![feature(addr_parse_ascii)]
-#![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 
+extern crate core;
+
+use std::borrow::Cow;
 use std::net::Ipv4Addr;
+use std::panic::AssertUnwindSafe;
+use std::pin::pin;
+use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
-use bytes::Bytes;
-use futures::future::select_ok;
-use futures::FutureExt;
+use anyhow::Context;
+use crossbeam::atomic::AtomicCell;
+use futures::{StreamExt};
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
+use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
-use tokio::time::{Instant, Interval, MissedTickBehavior};
 use crate::prelude::*;
 use crate::entity::*;
 use crate::retrying_client::RetryingClient;
-use fatal::*;
-use crate::config::{CONFIG, GetIpError};
+use err::{err, warn};
+use crate::config::Config;
+use crate::config::ip_source::GetIpError;
+use crate::err::ExitListener;
 use crate::network_listener::has_internet;
-use crate::updaters::{UpdaterEvent, UpdatersManager};
+use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
+use crate::util::new_skip_interval;
 
 macro_rules! patch_url {
     ($record_id:expr) => {
@@ -53,28 +63,40 @@ const GET_URL: &str = concat!(
 mod prelude;
 mod entity;
 mod retrying_client;
-mod fatal;
+mod err;
 mod network_listener;
+mod console_listener;
 mod updaters;
 mod config;
 mod util;
 
+async fn get_ip(client: RetryingClient, cfg: Config) -> Result<Ipv4Addr, GetIpError> {
+    let last_err = AtomicCell::new(None);
+    
+    let iter = cfg.ip_sources().map(|x| x.resolve_ip(&client, &cfg));
+    let stream = futures::stream::iter(iter)
+        .buffer_unordered(cfg.concurrent_resolve().get() as usize)
+        .filter_map(|x| async {
+            match x {
+                Ok(x) => Some(x),
+                Err(err) => {
+                    last_err.store(Some(err));
+                    None
+                }
+            }
+        });
+    
+    pin!(stream).next().await.ok_or_else(|| {
+        last_err.take().unwrap_or(GetIpError::NoIpSources)
+    })
+}
 
 struct DdnsContext {
     client: RetryingClient,
-    errors_semaphore: Arc<Semaphore>,
-    warning_semaphore: Arc<Semaphore>
+    message_boxes: MessageBoxes
 }
 
 impl DdnsContext {
-    async fn get_ip(client: RetryingClient) -> Result<Ipv4Addr, GetIpError> {
-        let cfg = CONFIG.read().await;
-        let iter = cfg.ip_sources.iter()
-            .map(|x| Box::pin(x.resolve_ip(&client)));
-
-        select_ok(iter).await.map(|(ip, _)|ip)
-    }
-
     async fn get_record(&self) -> reqwest::Result<OneOrLen<Record>> {
         Ok(
             self.client.get(GET_URL)
@@ -88,13 +110,11 @@ impl DdnsContext {
         )
     }
 
-    async fn update_record(&self, id: &str, ip: Ipv4Addr) -> MayPanic<Result<(), Bytes>> {
+    async fn update_record(&self, id: &str, ip: Ipv4Addr, _cfg: Config) -> anyhow::Result<()> {
         let data = format! {
-            concat! {
-                r###"{{"type":"A","name":""###,
-                include_str!("./secret/record"),
-                r###"","content":"{ip}","proxied":false}}"###
-            }, ip = ip
+            r###"{{"type":"A","name":"{record}","content":"{ip}","proxied":false}}"###,
+            ip = ip,
+            record = include_str!("./secret/record")
         };
 
         let response = self.client.patch(patch_url!(id))
@@ -102,127 +122,158 @@ impl DdnsContext {
             .header(AUTHORIZATION_KEY, AUTH_KEY)
             .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
             .body(data)
-            .send().await
-            .map_err(|err| err!(f!"{err:?}", -444))?;
+            .send().await?;
 
         let failure = !response.status().is_success();
 
-        let bytes = match response.bytes().await {
-            Ok(bytes) => bytes,
-            Err(err) => return Ok(Err(Bytes::from(format!("unable to retrieve bytes because: {err:?}"))))
-        };
+        let bytes = response.bytes().await.with_context(|| "unable to retrieve bytes")?;
+        
+        let response = serde_json::from_slice::<PatchResponse>(&bytes)
+            .with_context(|| "unable to deserialize patch response json")?;
 
-        let response = match serde_json::from_slice::<PatchResponse>(&bytes) {
-            Ok(response) => response,
-            Err(err) => return Ok(Err(Bytes::from(format!("unable to deserialize json due to: {err:?}"))))
-        };
-
-        match failure || !response.success {
-            false => Ok(Ok(())),
-            true  => Ok(Err(bytes)),
+        if failure || !response.success {
+            anyhow::bail!("Bad response: {}", String::from_utf8_lossy(&bytes))
         }
+        Ok(())
     }
 
-    pub async fn run_ddns(&self) -> MayPanic<()> {
-        let ip_task = tokio::spawn(Self::get_ip(self.client.clone()));
-        
-        let records = self.get_record().await
-            .map_err(|err| err!(f!"{err:?}", -222))?;
+    pub async fn run_ddns(&self, cfg: Config) -> anyhow::Result<()> {
+        let ip_task = tokio::spawn(get_ip(self.client.clone(), cfg.clone()));
+        let records = self.get_record().await?;
         
         match records {
             OneOrLen::One(Record { id, ip, name}) => {
-                assert!(&*name == RECORD, f!"Expected {RECORD} found {name}", 99)?;
+                anyhow::ensure!(&*name == RECORD, "Expected {RECORD} found {name}");
 
-                let current_ip = ip_task.await
-                    .map_err(|err| err!(f!"Join Error: {err}", -333))?
-                    .map_err(|err| err!(f!"Get Ip Error: {err}", -444))?;
-
+                let current_ip = ip_task.await??;
+                
                 match Ipv4Addr::from_str(&ip) {
-                    Err(_) => {
-                        tokio::spawn(spawn_message_box(
-                            Arc::clone(&self.warning_semaphore),
-                            move || warn(&format!("cloudflare returned invalid ip: {ip}")),
-                        ));
+                    Err(_) => self.message_boxes.warning(format!("cloudflare returned an invalid ip: {ip}")).await,
+                    Ok(ip) if ip == current_ip => {
+                        dbg_println!("IP didn't change skipping record update");
+                        return Ok(());
                     },
-                    Ok(ip) if ip == current_ip => return Ok(()),
                     Ok(_)  => {}
                 }
 
-                self.update_record(&id, current_ip).await?.map_err(|e| { 
-                    err!(f!("Could not update record got response: {}", String::from_utf8_lossy(&e)), -1055)
-                })
+                self.update_record(&id, current_ip, cfg).await
             },
-            OneOrLen::Len(len) => Err(err!(f!"Expected 1 record Got {len}", 99))
+            OneOrLen::Len(len) => anyhow::bail!("Expected 1 record Got {len}")
         }
     }
     
 }
 
-#[inline]
-fn new_interval(period: Duration) -> Interval {
-    new_interval_at(Instant::now(), period)
+#[derive(Clone)]
+struct MessageBoxes {
+    errors_semaphore: Arc<Semaphore>,
+    warning_semaphore: Arc<Semaphore>
 }
 
-fn new_interval_at(start: Instant, period: Duration) -> Interval {
-    let mut interval = tokio::time::interval_at(start, period);
-    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    interval
+impl MessageBoxes {
+    async fn custom_error(&self, fun: impl FnOnce() + Send + 'static) {
+        err::spawn_message_box(Arc::clone(&self.errors_semaphore), fun).await
+    }
+
+    async fn custom_warning(&self, fun: impl FnOnce() + Send + 'static) {
+        err::spawn_message_box(Arc::clone(&self.warning_semaphore), fun).await
+    }
+
+    async fn error(&self, msg: impl Into<Cow<'static, str>>) {
+        let msg = msg.into();
+        self.custom_error(move || err(&msg)).await
+    }
+    
+    async fn warning(&self, msg: impl Into<Cow<'static, str>>) {
+        let msg = msg.into();
+        self.custom_warning(move || warn(&msg)).await
+    }
 }
 
-#[tokio::main]
 async fn real_main() -> ! {
     let ctx = DdnsContext {
         client: RetryingClient::new(),
-        errors_semaphore: Arc::new(Semaphore::new(5)),
-        warning_semaphore: Arc::new(Semaphore::new(5)),
+        message_boxes: MessageBoxes {
+            errors_semaphore: Arc::new(Semaphore::new(5)),
+            warning_semaphore: Arc::new(Semaphore::new(5))
+        }
     };
 
-    let mut interval = new_interval(Duration::from_secs(60 * 60)); // 1 hour
-    let mut updaters_manager = UpdatersManager::new();
+    let mut updaters_manager = UpdatersManager::new(ctx.message_boxes.clone());
+    let mut exit_listener = ExitListener::new();
     
-    macro_rules! show_err {
-        ($fn: expr) => { spawn_message_box(Arc::clone(&ctx.errors_semaphore), $fn).await };
-    }
-
     network_listener::subscribe(&mut updaters_manager);
+    console_listener::subscribe(&mut updaters_manager);
+    let cfg_store = config::listener::subscribe(&mut updaters_manager).await;
+
+
+    // 1 hour
+    // this will be controlled by config
+    let mut interval = new_skip_interval(Duration::from_secs(60 * 60)); 
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if !has_internet() {
-                    interval.reset_after((interval.period()/8).max(Duration::from_secs(5)));
-                    dbg_println!("no internet available skipping update"); continue;
+                if !has_internet().await {
+                    dbg_println!("no internet available skipping update");
+                    continue;
                 }
-            
+                
                 dbg_println!("updating");
-                match ctx.run_ddns().await {
-                    Err(panic) => show_err!(move || {
-                        dbg_println!("responsibly panicking");
-                        match std::panic::catch_unwind(panic) {
-                            Ok(never) => match never {  },
-                            Err(_) => dbg_println!("caught panic")
-                        }
-                    }),
+                match ctx.run_ddns(cfg_store.load_config()).await {
+                    Err(panic) => ctx.message_boxes.error(panic.to_string()).await,
                     Ok(()) => dbg_println!("successfully updated")
                 }
             },
             res = updaters_manager.watch() => match res {
                 UpdaterEvent::Update => interval.reset_immediately(),
-                UpdaterEvent::ServiceExited(status) =>
-                    show_err!(move || err(&format!("{status}")))
+                UpdaterEvent::ServiceEvent(exit) => {
+                    match exit.status {
+                        UpdaterExitStatus::Success => {},
+                        UpdaterExitStatus::Panic | UpdaterExitStatus::Error(_) => {
+                            ctx.message_boxes.error(format!("Updater abruptly exited: {exit}")).await
+                        }
+                        UpdaterExitStatus::TriggerExit(code) => err::exit(code),
+                        UpdaterExitStatus::TriggerRestart => todo!(),
+                    }
+                }
             },
+            _ = exit_listener.recv() => {
+                updaters_manager.broadcast_shutdown();
+                err::exit(0)
+            }
         }
     }
+
 }
 
-fn main() -> ! {
-    set_hook();
+#[cfg(feature = "trace")] 
+fn make_runtime() -> Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all().build().expect("failed ot build runtime")
+}
+
+#[cfg(not(feature = "trace"))]
+fn make_runtime() -> Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all().build().expect("failed ot build runtime")
+}
+
+fn main() -> ExitCode {
+    err::set_hook();
+    #[cfg(feature = "trace")] console_subscriber::init();
+    
+    let runtime = make_runtime();
     loop {
-        let _ = match std::panic::catch_unwind(real_main) {
-            Ok(never) => never,
-            
-            // should be handled by the panic hook
-            Err(e) => e
-        };
+        let exit = err::catch_exit(AssertUnwindSafe(|| runtime.block_on(real_main())));
+        if let Some(exit) = exit {
+            dbg_println!("Shutting down the runtime...");
+            drop(runtime);
+            dbg_println!("Exiting...");
+            return ExitCode::from(exit)
+        }
+        dbg_println!("Retrying in 15s...");
+        thread::sleep(Duration::from_secs(15));
+        dbg_println!("Retrying");
     }
 }

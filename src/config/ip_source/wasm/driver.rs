@@ -14,10 +14,12 @@ use interprocess::local_socket::tokio::{RecvHalf, SendHalf, Stream as LocalSocke
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use ahash::RandomState as AHashState;
+use interprocess::local_socket::traits::tokio::Stream;
 use tokio::time::{sleep, timeout};
 use tokio::sync::{oneshot, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::error::Elapsed;
+use crate::config::ip_source::GetIpError;
 
 #[derive(Encode)]
 enum WasmCommand<'a> {
@@ -89,16 +91,7 @@ struct WasmDriverInner {
 
 pub struct WasmDriver(Option<WasmDriverInner>);
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-
-macro_rules! debug_unwrap_unchecked {
-    ($opt: expr) => {
-        match cfg!(debug_assertions) {
-            false => ($opt).unwrap_unchecked(),
-            true => ($opt).unwrap(),
-        }
-    };
-}
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl WasmDriver {
     async fn read_response<R: AsyncBufRead + Unpin>(stream: &mut R) -> Result<Option<Response>> {
@@ -140,7 +133,6 @@ impl WasmDriver {
         };
 
         stream.write_all(&encoded).await?;
-        stream.flush().await?;
         Ok(())
     }
 
@@ -149,10 +141,15 @@ impl WasmDriver {
     }
 
     async fn _open(path: &Path) -> Result<Self> {
+        let owned = path.to_path_buf();
+        if let Ok(false) = tokio::task::spawn_blocking(move || owned.try_exists()).await? { 
+            anyhow::bail!(GetIpError::NoWasmDriver)
+        }
+        
         let mut child = Command::new(path)
             .stderr(Stdio::inherit())
             .stdout(Stdio::piped())
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .spawn()?;
 
         let (recv, mut send) = timeout(
@@ -264,15 +261,11 @@ impl WasmDriver {
         let module = module.to_string_lossy()
             .into_owned().into_boxed_str();
 
-        let (rx, tx) = oneshot::channel();
-        let inner = unsafe {
-            // the only time this is none is after close
-            // and we guarantee that we won't use this method during drop
-            debug_unwrap_unchecked!(self.0.as_ref())
-        };
-        inner.sender.send((module, data, rx)).await?;
+        let (tx, rx) = oneshot::channel();
+        let inner = self.0.as_ref().unwrap();
+        inner.sender.send((module, data, tx)).await?;
 
-        tx.await.with_context(|| "request timeout")?
+        rx.await.with_context(|| "request timeout")?
             .map_err(|e| anyhow::anyhow!("failed to run wasm command: {e}"))
     }
 
@@ -281,11 +274,7 @@ impl WasmDriver {
             write_task,
             mut read_task,
             sender
-        } = unsafe {
-            // our internal variance guarantees that we only ever take our selves here
-            // that internal variance being: we only take on close before drop
-            debug_unwrap_unchecked!(self.0.take())
-        };
+        } = self.0.take().unwrap();
 
         drop(sender);
         write_task.await??;
