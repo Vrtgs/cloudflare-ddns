@@ -120,8 +120,8 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
 }
 
 pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> ConfigStorage {
-    let updater = updaters_manager.add_updater("config-listener");
     let msg_bx_handle = updaters_manager.message_boxes().clone();
+    let (updater, jh_entry) = updaters_manager.add_updater("config-listener");
     
     let ip_sources = match Sources::from_file("./sources.toml").await {
         Ok(x) => x,
@@ -141,10 +141,13 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> ConfigStorage 
     let update_task = tokio::spawn(async move {
         let res = listen(cfg_weak, &updater, msg_bx_handle).await;
         updater.exit(res)
-    }).abort_handle();
-
+    });
+    let abort = update_task.abort_handle();
+    
+    jh_entry.insert(update_task);
+    
     ConfigStorage {
         cfg,
-        update_task
+        update_task: abort
     }
 }

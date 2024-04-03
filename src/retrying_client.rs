@@ -47,16 +47,16 @@ impl RetryingClient {
         const TIMEOUT: Duration = Duration::from_secs((2 * 60) + 30); // 2.5 minutes
 
         #[cfg(feature = "trace")]
-        const IDLE_TIMEOUT: Duration = Duration::new(0, 0);
+        const IDLE_TIMEOUT: Duration = Duration::ZERO; // instant timeout
 
         #[cfg(not(feature = "trace"))]
-        const IDLE_TIMEOUT: Duration = match TIMEOUT.checked_mul(MAX_RETRY.get() as u32) {
-            Some(x) => x,
-            None => panic!("idle timeout too big")
-        };
+        const IDLE_TIMEOUT: Option<Duration> = TIMEOUT.checked_mul(MAX_RETRY.get() as u32);
         
-        ClientBuilder::new()
-            .timeout(TIMEOUT)
+        let builder = ClientBuilder::new();
+        #[cfg(feature = "trace")]
+        let builder = builder.pool_max_idle_per_host(0);
+
+        builder.timeout(TIMEOUT)
             .pool_idle_timeout(IDLE_TIMEOUT)
             .use_rustls_tls()
             .build()

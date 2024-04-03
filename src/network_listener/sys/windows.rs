@@ -8,14 +8,13 @@ use std::marker::{PhantomData, PhantomPinned};
 use std::pin::Pin;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Notify;
-use tokio::task::JoinHandle;
 use windows::core::{GUID, implement, Interface};
 use windows::Win32::System::Com;
 use windows::Win32::Networking::NetworkListManager::{INetworkEvents, INetworkEvents_Impl, INetworkListManager, NetworkListManager, NLM_CONNECTIVITY, NLM_CONNECTIVITY_IPV4_INTERNET, NLM_CONNECTIVITY_IPV6_INTERNET, NLM_NETWORK_PROPERTY_CHANGE};
 use windows::core::Result as WinResult;
 use windows::Win32::Foundation::VARIANT_BOOL;
 use crate::dbg_println;
-use crate::updaters::{Updater, UpdatersManager};
+use crate::updaters::UpdatersManager;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UpdaterError {
@@ -137,9 +136,9 @@ fn listen<F: Fn(), S: Future>(notify_callback: F, shutdown: S) -> Result<S::Outp
     })
 }
 
-pub fn subscribe(updaters_manager: &mut UpdatersManager) -> JoinHandle<()> {
-    let updater: Updater = updaters_manager.add_updater("network-listener");
-    tokio::task::spawn_blocking(move || {
+pub fn subscribe(updaters_manager: &mut UpdatersManager) {
+    let (updater, jh_entry) = updaters_manager.add_updater("network-listener");
+    jh_entry.insert(tokio::task::spawn_blocking(move || {
         let local_notif = Notify::new();
         
         let notify_callback = || {
@@ -158,7 +157,7 @@ pub fn subscribe(updaters_manager: &mut UpdatersManager) -> JoinHandle<()> {
 
         let res = listen(notify_callback, shutdown);
         updater.exit(res)
-    })
+    }));
 }
 
 

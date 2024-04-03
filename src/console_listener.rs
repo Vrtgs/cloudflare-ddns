@@ -3,7 +3,6 @@ use std::convert::Infallible;
 use once_cell::sync::Lazy;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
 use crate::updaters::{Updater, UpdatersManager};
 
 
@@ -47,9 +46,9 @@ async fn listen(updater: &Updater) -> io::Result<Status> {
 }
 
 #[cfg(debug_assertions)]
-pub fn subscribe(updaters_manager: &mut UpdatersManager) -> JoinHandle<()> {
-    let updater: Updater = updaters_manager.add_updater("console-listener");
-    tokio::spawn(async move {
+pub fn subscribe(updaters_manager: &mut UpdatersManager) {
+    let (updater, jh_entry) = updaters_manager.add_updater("console-listener");
+    jh_entry.insert(tokio::spawn(async move {
         let res = tokio::select! {
             _ = updater.wait_shutdown() => Ok(Status::Success),
             res = listen(&updater) => res,
@@ -61,7 +60,7 @@ pub fn subscribe(updaters_manager: &mut UpdatersManager) -> JoinHandle<()> {
             Ok(Status::TriggerExit) => updater.trigger_exit(0),
             Err(e) => updater.exit(Err(e))
         }
-    })
+    }));
 }
 
 #[cfg(not(debug_assertions))]

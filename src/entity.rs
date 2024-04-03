@@ -23,7 +23,7 @@ pub enum OneOrLen<T> {
 impl<'input, T: Deserialize<'input>> Deserialize<'input> for OneOrLen<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'input> {
         struct OneOrLenVisitor<T> {
-            marker: PhantomData<T>,
+            marker: PhantomData<T>
         }
 
         impl<'de, T: Deserialize<'de>> Visitor<'de> for OneOrLenVisitor<T> {
@@ -50,10 +50,7 @@ impl<'input, T: Deserialize<'input>> Deserialize<'input> for OneOrLen<T> {
             }
         }
 
-        let visitor = OneOrLenVisitor {
-            marker: PhantomData,
-        };
-        deserializer.deserialize_seq(visitor)
+        deserializer.deserialize_seq(OneOrLenVisitor { marker: PhantomData })
     }
 }
 

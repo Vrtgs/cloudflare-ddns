@@ -10,6 +10,7 @@ pub(crate) struct CfgMut {
     ip_sources: Sources
 }
 
+/// Cheap clone to read-only config
 #[derive(Clone)]
 pub struct Config(Arc<CfgMut>);
 

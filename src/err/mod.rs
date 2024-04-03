@@ -8,9 +8,7 @@ use tokio::sync::Semaphore;
 use windows::core::{PCWSTR, w as wide};
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONASTERISK, MB_ICONERROR, MB_OK, MessageBoxW};
 
-mod exit;
-
-pub use exit::{exit, catch_exit, ExitListener};
+pub mod exit;
 
 #[macro_export]
 macro_rules! dbg_println {
@@ -20,7 +18,7 @@ macro_rules! dbg_println {
 }
 
 
-fn encode_pcwstr(str: &str) -> Vec<u16> {
+fn encode_wide(str: &str) -> Vec<u16> {
     str.encode_utf16().chain([0u16]).collect::<Vec<u16>>()
 }
 
@@ -69,7 +67,7 @@ pub unsafe fn warn_utf16(warning: PCWSTR) {
 #[inline(never)]
 pub fn warn(warning: &str) {
     dbg_println!("Warning: {warning}");
-    let warning = encode_pcwstr(warning);
+    let warning = encode_wide(warning);
     unsafe { warn_utf16(PCWSTR::from_raw(warning.as_ptr())) }
 }
 
@@ -78,7 +76,7 @@ pub fn warn(warning: &str) {
 #[inline(never)]
 pub fn err(err: &str) {
     dbg_println!("Error: {err}");
-    let err = encode_pcwstr(err);
+    let err = encode_wide(err);
     unsafe { err_utf16(PCWSTR::from_raw(err.as_ptr())) }
 }
 
