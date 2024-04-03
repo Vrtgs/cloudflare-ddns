@@ -4,13 +4,16 @@ use thiserror::Error;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter, Write};
+use std::future::Future;
 use std::io::ErrorKind;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::num::NonZeroU8;
 use std::ops::Deref;
 use tokio::io;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use serde_json::{Deserializer as JsonDeserializer};
 use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -20,6 +23,7 @@ use toml::Value;
 use url::Url;
 use anyhow::Result;
 use bytes::Bytes;
+use futures::task::noop_waker_ref;
 use serde::ser::SerializeMap;
 use serde_json::de::SliceRead;
 use simdutf8::basic::Utf8Error;
@@ -46,7 +50,7 @@ pub enum GetIpError {
     NoWasmDriver
 }
 
-#[derive(Clone)]
+#[derive(PartialOrd, PartialEq, Ord, Eq)]
 pub struct StrOrBytes(pub Box<[u8]>);
 
 impl<'de> Deserialize<'de> for StrOrBytes {
@@ -105,7 +109,6 @@ impl Debug for StrOrBytes {
         }
     }
 }
-
 impl Serialize for StrOrBytes {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         match simdutf8::basic::from_utf8(&self.0) {
@@ -124,7 +127,7 @@ impl Deref for StrOrBytes {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, PartialOrd, PartialEq, Ord, Eq, Serialize, Deserialize)]
 pub enum ProcessStep {
     /// parses the current data as utf-8
     Plaintext,
@@ -170,7 +173,7 @@ fn get_json_key(json: &[u8], key: &str) -> serde_json::Result<serde_json::Value>
 }
 
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Ord, Eq, Serialize, Deserialize)]
 struct Process {
     steps: Arc<[ProcessStep]>
 }
@@ -252,6 +255,7 @@ async fn into_process(mut steps: Vec<ProcessStep>) -> Result<Process, io::Error>
     steps.map(|steps| Process { steps: steps.into() })
 }
 
+#[derive(Debug, PartialOrd, PartialEq, Ord, Eq)]
 pub struct Sources {
     sources: BTreeMap<Url, Process>,
     pub(crate) driver_path: Option<Box<Path>>,
@@ -324,9 +328,12 @@ impl Sources {
         Self::deserialize_async(&tokio::fs::read_to_string(path).await?).await
     }
 
-    pub async fn default() -> Self {
-        Self::from_iter(include!("../../default/gen/sources.rs"), None, None).await
-            .expect("Bad build artifact")
+    pub fn default() -> Self {
+        let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(include!("../../default/gen/sources.array"), None, None))
+            .poll(&mut Context::from_waker(noop_waker_ref()))
+            else { panic!("bad build artifact") };
+        
+        sources
     }
     
     pub fn sources(&self) -> impl Iterator<Item=IpSource> + '_ {
@@ -345,7 +352,7 @@ impl Debug for Sources {
 }
 
 impl Serialize for Sources {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> where S: Serializer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let mut map_serialize = serializer.serialize_map(Some(self.sources.len()))?;
 
         for (url, proc) in self.sources.iter() {

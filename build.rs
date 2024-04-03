@@ -21,7 +21,7 @@ async fn make_default_sources_toml() -> io::Result<()> {
 }
 
 async fn make_default_sources_rs() -> io::Result<()> {
-    let mut file = BufWriter::new(File::create("./default/gen/sources.rs").await?);
+    let mut file = BufWriter::new(File::create("./default/gen/sources.array").await?);
 
     let sources = plaintext_sources!()
         .map::<_, (&str, [(); 0])>(|url| (url, []));

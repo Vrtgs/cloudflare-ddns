@@ -4,6 +4,7 @@
 extern crate core;
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::net::Ipv4Addr;
 use std::pin::pin;
 use std::process::ExitCode;
@@ -16,6 +17,7 @@ use futures::{StreamExt};
 use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
+use tokio::try_join;
 use crate::prelude::*;
 use crate::entity::*;
 use crate::retrying_client::RetryingClient;
@@ -61,34 +63,34 @@ mod updaters;
 mod config;
 mod util;
 
-async fn get_ip(client: RetryingClient, cfg: Config) -> Result<Ipv4Addr, GetIpError> {
-    let last_err = parking_lot::Mutex::new(None);
-    
-    let iter = cfg.ip_sources().map(|x| x.resolve_ip(&client, &cfg));
-    let stream = futures::stream::iter(iter)
-        .buffer_unordered(cfg.concurrent_resolve().get() as usize)
-        .filter_map(|x| std::future::ready({
-            match x {
-                Ok(x) => Some(x),
-                Err(err) => {
-                    *last_err.lock() = Some(err);
-                    None
-                }
-            }
-        }));
-    
-    pin!(stream).next().await.ok_or_else(|| {
-        last_err.lock().take().unwrap_or(GetIpError::NoIpSources)
-    })
-}
-
 struct DdnsContext {
     client: RetryingClient,
     message_boxes: MessageBoxes
 }
 
 impl DdnsContext {
-    async fn get_record(&self, _cfg: Config) -> reqwest::Result<OneOrLen<Record>> {
+    async fn get_ip(&self, cfg: Config) -> Result<Ipv4Addr, GetIpError> {
+        let last_err = Cell::new(None);
+
+        let iter = cfg.ip_sources().map(|x| x.resolve_ip(&self.client, &cfg));
+        let stream = futures::stream::iter(iter)
+            .buffer_unordered(cfg.concurrent_resolve().get() as usize)
+            .filter_map(|x| std::future::ready({
+                match x {
+                    Ok(x) => Some(x),
+                    Err(err) => {
+                        last_err.set(Some(err));
+                        None
+                    }
+                }
+            }));
+
+        pin!(stream).next().await.ok_or_else(|| {
+            last_err.take().unwrap_or(GetIpError::NoIpSources)
+        })
+    }
+    
+    async fn get_record(&self, _cfg: Config) -> anyhow::Result<OneOrLen<Record>> {
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={record}",
             zone_id= include_str!("secret/zone-id"),
@@ -136,13 +138,13 @@ impl DdnsContext {
     }
 
     pub async fn run_ddns(&self, cfg: Config) -> anyhow::Result<()> {
-        let ip_task = tokio::spawn(get_ip(self.client.clone(), cfg.clone()));
+        let (current_ip, record) = try_join!(
+            async {Ok(self.get_ip(cfg.clone()).await?)}, self.get_record(cfg.clone())
+        )?;
         
-        match self.get_record(cfg.clone()).await? {
+        match record {
             OneOrLen::One(Record { id, ip, name}) => {
                 anyhow::ensure!(&*name == RECORD, "Expected {RECORD} found {name}");
-                
-                let current_ip = ip_task.await??;
                 
                 match Ipv4Addr::from_str(&ip) {
                     Err(_) => self.message_boxes.warning(format!("cloudflare returned an invalid ip: {ip}")).await,
@@ -202,7 +204,6 @@ async fn real_main() -> Schedule {
     };
 
     let mut updaters_manager = UpdatersManager::new(ctx.message_boxes.clone());
-    // let mut exit_listener = ExitListener::new();
 
     err::exit::subscribe(&mut updaters_manager);
     network_listener::subscribe(&mut updaters_manager);

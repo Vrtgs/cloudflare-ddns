@@ -66,7 +66,7 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
         Ok::<_, notify::Error>(watcher)
     }).await??;
     
-    let mut shutdown = pin!(async {
+    let shutdown = async {
         let cfg_dropped = async {
             loop {
                 if Weak::upgrade(&cfg).is_none() { return }
@@ -74,14 +74,13 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
             }
         };
         
-        let shutdown_signal = updater.wait_shutdown();
-        
         tokio::select! {
-            _ = shutdown_signal => (),
+            _ = updater.wait_shutdown() => (),
             _ = cfg_dropped => (),
         }
-    });
-
+    };
+    let mut shutdown = pin!(shutdown);
+    
     loop {
         tokio::select! {
             Ok(()) = tx.changed() => {
@@ -127,7 +126,7 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> ConfigStorage 
         Ok(x) => x,
         Err(err) => {
             msg_bx_handle.warning(format!("{err}\n\n\n\n...Using default config...")).await;
-            Sources::default().await
+            Sources::default()
         }
     };
     

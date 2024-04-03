@@ -32,7 +32,7 @@ impl Display for UpdaterExitStatus {
             UpdaterExitStatus::Success => write!(f, "successfully exited"),
             UpdaterExitStatus::Panic => write!(f, "died unexpectedly"),
             UpdaterExitStatus::Error(e) => write!(f, "exited with the error: {e}"),
-            UpdaterExitStatus::TriggerRestart => write!(f, "triggered a restart"), 
+            UpdaterExitStatus::TriggerRestart => write!(f, "triggered a restart"),
             UpdaterExitStatus::TriggerExit(code) => write!(f, "triggered an exit with code: {code}"),
         }
     }
@@ -71,20 +71,18 @@ impl UpdatersManager {
     
     /// watches for service changes
     pub async fn watch(&mut self) -> UpdaterEvent {
-        loop {
-            tokio::select! {
-                _ = self.notifier.notified() => return UpdaterEvent::Update,
-                state = self.rcv.recv() => {
-                    let state = state
-                        .expect("we always hold at least one sender, and we never close");
-                    
-                    assert!(
-                        self.active_services.remove(state.name).is_some(),
-                        "the updater didn't give a join handle"
-                    );
-                    
-                    return UpdaterEvent::ServiceEvent(state)
-                }
+        tokio::select! {
+            _ = self.notifier.notified() => UpdaterEvent::Update,
+            state = self.rcv.recv() => {
+                let state = state
+                    .expect("we always hold at least one sender, and we never close");
+
+                assert!(
+                    self.active_services.remove(state.name).is_some(),
+                    "the updater didn't give a join handle"
+                );
+
+                UpdaterEvent::ServiceEvent(state)
             }
         }
     }
@@ -94,15 +92,15 @@ impl UpdatersManager {
     pub fn add_updater(&mut self, name: &'static str) -> (Updater, JhEntry<'_>) {
         let Entry::Vacant(entry) = self.active_services.entry(name)
             else { panic!("updater must have a unique name") };
-        
+
         let snd = self.snd.clone();
-        
+
         let entry = JhEntry {
             entry: Some(entry),
             send_fail: &mut self.snd,
             name,
         };
-        
+
         (Updater {
             name,
             notifier: Arc::downgrade(&self.notifier),
@@ -126,7 +124,7 @@ impl UpdatersManager {
 
         let _ = self.shutdown.send(());
         let iter = self.active_services.into_values()
-            .map(|join_handle| forward_panic(join_handle));
+            .map(forward_panic);
         
         futures::future::join_all(iter).await;
     }

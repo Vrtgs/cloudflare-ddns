@@ -1,3 +1,5 @@
+concurrent-resolve = 24
+
 ["https://checkip.amazonaws.com/"]
 steps = ["Plaintext"]
 
