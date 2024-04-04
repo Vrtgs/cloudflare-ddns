@@ -59,7 +59,6 @@ mod sys {
         }
     }
 
-    #[cfg(windows)]
     #[cold]
     #[inline(never)]
     pub fn warn(warning: &str) {
@@ -68,7 +67,6 @@ mod sys {
         unsafe { warn_utf16(PCWSTR::from_raw(warning.as_ptr())) }
     }
 
-    #[cfg(windows)]
     #[cold]
     #[inline(never)]
     pub fn err(err: &str) {
