@@ -58,26 +58,28 @@ mod sys {
             );
         }
     }
-
-    #[cold]
-    #[inline(never)]
+    
     pub fn warn(warning: &str) {
         let warning = encode_wide(warning);
         unsafe { warn_utf16(PCWSTR::from_raw(warning.as_ptr())) }
     }
-
-    #[cold]
-    #[inline(never)]
+    
     pub fn err(err: &str) {
         let err = encode_wide(err);
         unsafe { err_utf16(PCWSTR::from_raw(err.as_ptr())) }
     }
 }
 
+
+#[cold]
+#[inline(never)]
 pub fn err(err: &str) {
     dbg_println!("Error: {err}");
     sys::err(err)
 }
+
+#[cold]
+#[inline(never)]
 pub fn warn(warning: &str) {
     dbg_println!("Warning: {warning}");
     sys::warn(warning)
