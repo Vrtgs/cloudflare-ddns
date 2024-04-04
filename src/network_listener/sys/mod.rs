@@ -1,12 +1,14 @@
-#[cfg(windows)]
-mod windows;
+#[cfg(windows)] mod windows;
+#[cfg(windows)] use windows as sys;
 
-#[cfg(windows)]
-pub use windows::{subscribe, has_internet};
+#[cfg(target_os = "macos")] mod macos;
+#[cfg(target_os = "macos")] use macos as sys;
 
 
-#[cfg(target_os = "macos")]
-mod macos;
+pub use sys::has_internet;
 
-#[cfg(target_os = "macos")]
-pub use macos::{subscribe, has_internet};
+use crate::updaters::UpdatersManager;
+pub fn subscribe(updaters_manager: &mut UpdatersManager) {
+    let (updater, jh_entry) = updaters_manager.add_updater("network-listener");
+    jh_entry.insert(sys::subscribe(updater))
+}
