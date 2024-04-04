@@ -88,18 +88,18 @@ pub async fn spawn_message_box(semaphore: Arc<Semaphore>, err: impl FnOnce() + S
     }
 }
 
-fn hook(_info: &PanicInfo)  {
+fn hook(info: &PanicInfo)  {
     macro_rules! try_cast {
-        ($type: ty $(, $rest: ty)* |> $default: expr) => {
-            match _info.payload().downcast_ref::<$type>() {
+        ([$payload:expr] $type: ty $(, $rest: ty)* |> $default: expr) => {
+            match $payload.downcast_ref::<$type>() {
                 Some(s) => s,
-                None => try_cast!($($rest),* |> $default),
+                None => try_cast!([$payload] $($rest),* |> $default),
             }
         };
-        (|> $default: expr) => { $default };
+        ([$payload:expr] |> $default: expr) => { $default };
     }
     
-    let msg = try_cast!(String,&str,Box<str>,Rc<str>,Arc<str>,Cow<str> |> "dyn Any + Send + 'static");
+    let msg = try_cast!([info.payload()] String,&str,Box<str>,Rc<str>,Arc<str>,Cow<str> |> "dyn Any + Send + 'static");
 
     dbg_println!("We panicked at: {msg}");
     
