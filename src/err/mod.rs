@@ -35,7 +35,7 @@ mod sys {
 
     /// # Safety:
     ///   `err`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
-    pub unsafe fn err_utf16(err: PCWSTR) {
+    unsafe fn err_utf16(err: PCWSTR) {
         unsafe {
             MessageBoxW(
                 None,
@@ -48,7 +48,7 @@ mod sys {
 
     /// # Safety:
     ///   `warning`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
-    pub unsafe fn warn_utf16(warning: PCWSTR) {
+    unsafe fn warn_utf16(warning: PCWSTR) {
         unsafe {
             MessageBoxW(
                 None,
