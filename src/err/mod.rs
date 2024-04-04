@@ -62,7 +62,6 @@ mod sys {
     #[cold]
     #[inline(never)]
     pub fn warn(warning: &str) {
-        dbg_println!("Warning: {warning}");
         let warning = encode_wide(warning);
         unsafe { warn_utf16(PCWSTR::from_raw(warning.as_ptr())) }
     }
@@ -70,14 +69,19 @@ mod sys {
     #[cold]
     #[inline(never)]
     pub fn err(err: &str) {
-        dbg_println!("Error: {err}");
         let err = encode_wide(err);
         unsafe { err_utf16(PCWSTR::from_raw(err.as_ptr())) }
     }
 }
 
-
-pub use sys::{err, warn};
+pub fn err(err: &str) {
+    dbg_println!("Error: {err}");
+    sys::err(err)
+}
+pub fn warn(warning: &str) {
+    dbg_println!("Warning: {warning}");
+    sys::warn(warning)
+}
 
 pub async fn spawn_message_box(semaphore: Arc<Semaphore>, err: impl FnOnce() + Send + 'static) {
     if let Ok(permit) = semaphore.acquire_owned().await {
