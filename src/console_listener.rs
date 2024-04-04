@@ -65,6 +65,6 @@ pub fn subscribe(updaters_manager: &mut UpdatersManager) {
 
 #[cfg(not(debug_assertions))]
 #[inline]
-pub fn subscribe(_: &mut UpdatersManager) -> std::future::Ready<Result<(), tokio::task::JoinError>> {
-    std::future::ready(Ok(()))
+pub fn subscribe(_: &mut UpdatersManager) {
+
 }
