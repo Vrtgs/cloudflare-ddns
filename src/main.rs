@@ -265,8 +265,7 @@ fn make_runtime() -> Runtime {
 fn main() -> ExitCode {
     err::set_hook();
     #[cfg(feature = "trace")] console_subscriber::init();
-    
-    
+
     let runtime = make_runtime();
     loop {
         let exit = std::panic::catch_unwind(|| runtime.block_on(real_main()));

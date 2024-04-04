@@ -58,15 +58,50 @@ mod sys {
             );
         }
     }
-    
+
     pub fn warn(warning: &str) {
         let warning = encode_wide(warning);
         unsafe { warn_utf16(PCWSTR::from_raw(warning.as_ptr())) }
     }
-    
+
     pub fn err(err: &str) {
         let err = encode_wide(err);
         unsafe { err_utf16(PCWSTR::from_raw(err.as_ptr())) }
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod sys {
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    use core_foundation_sys::base::CFOptionFlags;
+    use core_foundation_sys::user_notification::{CFUserNotificationDisplayAlert, kCFUserNotificationCautionAlertLevel, kCFUserNotificationStopAlertLevel};
+
+    fn present_alert(title: &str, message: &str, flags: CFOptionFlags) {
+        let header = CFString::new(title);
+        let message = CFString::new(message);
+        unsafe {
+            CFUserNotificationDisplayAlert(
+                0.0,
+                flags,
+                std::ptr::null(), std::ptr::null(), std::ptr::null(),
+                header.as_concrete_TypeRef(), message.as_concrete_TypeRef(),
+                std::ptr::null(), std::ptr::null(), std::ptr::null(),
+                std::ptr::null_mut()
+            )
+        };
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub fn warn(warning: &str) {
+        present_alert("CloudFlare DDNS Warning", warning, kCFUserNotificationCautionAlertLevel);
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub fn err(err: &str) {
+        present_alert("CloudFlare DDNS Error", err, kCFUserNotificationStopAlertLevel);
     }
 }
 

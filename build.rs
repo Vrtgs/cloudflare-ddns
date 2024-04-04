@@ -79,6 +79,7 @@ async fn make_default_sources_rs() -> io::Result<()> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    tokio::fs::create_dir_all("./default/gen").await.unwrap();
     try_join!(
         make_default_sources_toml(),
         make_default_sources_rs()

@@ -2,6 +2,5 @@
 rustflags = [
     "-C", "target-cpu=native",
     "-C", "target-feature=+crt-static",
-    "-C", "link-arg=-fuse-ld=lld",
     "-Z", "threads=24"
 ]
