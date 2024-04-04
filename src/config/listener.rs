@@ -9,7 +9,7 @@ use tokio::task::{AbortHandle};
 use crate::config::{CfgMut, Config};
 use crate::config::ip_source::Sources;
 use notify_debouncer_full::{DebounceEventHandler, DebounceEventResult, FileIdMap, new_debouncer_opt};
-use crate::{dbg_println, MessageBoxes};
+use crate::MessageBoxes;
 use anyhow::Result;
 use crate::updaters::{Updater, UpdatersManager};
 
@@ -44,7 +44,7 @@ impl DebounceEventHandler for FsEventHandler {
 async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: MessageBoxes) -> Result<()> {
     let (rx, mut tx) = tokio::sync::watch::channel(Ok(vec![]));
     
-    const POLL_INTERVAL: Duration = Duration::from_secs(120);
+    const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
     let _watcher = tokio::task::spawn_blocking(move || {
         if !Path::new("./sources.toml").exists() {
@@ -85,13 +85,20 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
         tokio::select! {
             Ok(()) = tx.changed() => {
                 let events = {
-                    let res = tx.borrow_and_update();
-                    res.as_ref().map_err(|e|{
+                    let borrow = tx.borrow_and_update();
+                    borrow.as_ref().map_err(|e|{
                         e.iter().map(|e| format!("listen event error: {e}")).collect::<Vec<_>>()
-                    }).map_err(|e| anyhow!("Error listening to config {e:?}"))?.clone()
+                    }).map_err(|e| anyhow!("Error listening to config {e:?}")).cloned()
                 };
                 
-                dbg_println!("Config Listener: got event {events:?}");
+                let events = match events {
+                    Ok(events) => events,
+                    Err(e) => {
+                        msg_bx_handle.error(e.to_string()).await;
+                        continue
+                    },
+                };
+                
                 if !events.is_empty() {
                     let res = async {
                         Sources::deserialize_async(
@@ -103,14 +110,17 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
                         Ok(ip_sources) => {
                             // TODO: AliMark71
                             let Some(cfg) = Weak::upgrade(&cfg) else { break };
-                            cfg.store(Arc::new(CfgMut { ip_sources }));
+                            let new_cfg = CfgMut { ip_sources };
+                            if new_cfg == **cfg.load() { continue }
+                            
+                            cfg.store(Arc::new(new_cfg));
                             if updater.update().is_err() { break }
                         }
                         Err(e) => msg_bx_handle.warning(format!("config listen error: {e}")).await
                     }
                 }
             }
-            () = &mut shutdown => break,
+            _ = &mut shutdown => break,
             else => break
         }
     }

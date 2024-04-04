@@ -89,7 +89,7 @@ impl DdnsContext {
             last_err.take().unwrap_or(GetIpError::NoIpSources)
         })
     }
-    
+
     async fn get_record(&self, _cfg: Config) -> anyhow::Result<OneOrLen<Record>> {
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={record}",
@@ -145,7 +145,7 @@ impl DdnsContext {
         match record {
             OneOrLen::One(Record { id, ip, name}) => {
                 anyhow::ensure!(&*name == RECORD, "Expected {RECORD} found {name}");
-                
+
                 match Ipv4Addr::from_str(&ip) {
                     Err(_) => self.message_boxes.warning(format!("cloudflare returned an invalid ip: {ip}")).await,
                     Ok(ip) if ip == current_ip => {
@@ -189,12 +189,12 @@ impl MessageBoxes {
     }
 }
 
-enum Schedule {
+enum Action {
     Restart,
     Exit(u8)
 }
 
-async fn real_main() -> Schedule {
+async fn real_main() -> Action {
     let ctx = DdnsContext {
         client: RetryingClient::new(),
         message_boxes: MessageBoxes {
@@ -240,9 +240,9 @@ async fn real_main() -> Schedule {
                         }
                         UpdaterExitStatus::TriggerExit(code) => {
                             updaters_manager.shutdown().await;
-                            return Schedule::Exit(code);
+                            return Action::Exit(code);
                         },
-                        UpdaterExitStatus::TriggerRestart => return Schedule::Restart,
+                        UpdaterExitStatus::TriggerRestart => return Action::Restart,
                     }
                 }
             }
@@ -273,13 +273,13 @@ fn main() -> ExitCode {
         let exit = std::panic::catch_unwind(|| runtime.block_on(real_main()));
         
         match exit {
-            Ok(Schedule::Exit(exit)) => {
+            Ok(Action::Exit(exit)) => {
                 dbg_println!("Shutting down the runtime...");
                 drop(runtime);
                 dbg_println!("Exiting...");
                 return ExitCode::from(exit)
             }
-            Ok(Schedule::Restart) => dbg_println!("Restarting..."),
+            Ok(Action::Restart) => dbg_println!("Restarting..."),
             Err(_) => {
                 dbg_println!("Panicked!!");
                 dbg_println!("Retrying in 15s...");

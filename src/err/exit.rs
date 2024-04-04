@@ -33,13 +33,12 @@ mod sys {
 #[cfg(unix)]
 mod sys {
     use tokio::signal::unix as signal;
-    use super::ExitListener;
 
     pub(super) async fn recv_exit()  {
-        let terminate = signal::signal(signal::SignalKind::terminate()).unwrap();
-        let quit = signal::signal(signal::SignalKind::quit()).unwrap();
-        let hangup = signal::signal(signal::SignalKind::hangup()).unwrap();
-        let interrupt = signal::signal(signal::SignalKind::interrupt()).unwrap();
+        let mut terminate = signal::signal(signal::SignalKind::terminate()).unwrap();
+        let mut quit = signal::signal(signal::SignalKind::quit()).unwrap();
+        let mut hangup = signal::signal(signal::SignalKind::hangup()).unwrap();
+        let mut interrupt = signal::signal(signal::SignalKind::interrupt()).unwrap();
         wait_for_any!(
             terminate.recv(),
             quit.recv(),

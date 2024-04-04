@@ -255,7 +255,7 @@ async fn into_process(mut steps: Vec<ProcessStep>) -> Result<Process, io::Error>
     steps.map(|steps| Process { steps: steps.into() })
 }
 
-#[derive(Debug, PartialOrd, PartialEq, Ord, Eq)]
+#[derive(PartialOrd, PartialEq, Ord, Eq)]
 pub struct Sources {
     sources: BTreeMap<Url, Process>,
     pub(crate) driver_path: Option<Box<Path>>,
@@ -327,14 +327,6 @@ impl Sources {
     pub async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         Self::deserialize_async(&tokio::fs::read_to_string(path).await?).await
     }
-
-    pub fn default() -> Self {
-        let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(include!("../../default/gen/sources.array"), None, None))
-            .poll(&mut Context::from_waker(noop_waker_ref()))
-            else { panic!("bad build artifact") };
-        
-        sources
-    }
     
     pub fn sources(&self) -> impl Iterator<Item=IpSource> + '_ {
         self.sources.iter()
@@ -347,7 +339,19 @@ impl Debug for Sources {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_map()
             .entries(self.sources.iter().map(|(url, p)| (url.as_str(), p)))
+            .entries(self.driver_path.as_deref().map(|path| ("driver-path", path)))
+            .entries(self.concurrent_resolve.map(|num| ("concurrent-resolve", num)))
             .finish()
+    }
+}
+
+impl Default for Sources {
+    fn default() -> Self {
+        let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(include!("../../../default/gen/sources.array"), None, None))
+            .poll(&mut Context::from_waker(noop_waker_ref()))
+            else { panic!("bad build artifact") };
+
+        sources
     }
 }
 

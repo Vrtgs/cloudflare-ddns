@@ -6,6 +6,7 @@ use crate::config::ip_source::{IpSource, Sources};
 pub mod ip_source;
 pub mod listener;
 
+#[derive(Eq, Ord, PartialOrd, PartialEq)]
 pub(crate) struct CfgMut {
     ip_sources: Sources
 }

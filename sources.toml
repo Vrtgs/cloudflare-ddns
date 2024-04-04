@@ -29,3 +29,6 @@ steps = ["Plaintext"]
 
 ["https://dynamic.zoneedit.com/checkip.html"]
 steps = ["Plaintext"]
+
+["https://api.ipify.org/?format=json"]
+steps = [{ Json = { key = "ip" } }]
