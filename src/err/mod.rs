@@ -27,7 +27,7 @@ fn spawn_thread(fun: impl FnOnce() + Send + 'static) {
 #[cfg(windows)]
 mod sys {
     use windows::core::{PCWSTR, w as wide};
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONASTERISK, MB_ICONERROR, MB_OK, MessageBoxW};
+    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONWARNING, MB_OK, MessageBoxW};
 
     fn encode_wide(str: &str) -> Vec<u16> {
         str.encode_utf16().chain([0u16]).collect::<Vec<u16>>()
@@ -54,7 +54,7 @@ mod sys {
                 None,
                 warning,
                 wide!("CloudFlare DDNS Warning"),
-                MB_OK | MB_ICONASTERISK
+                MB_OK | MB_ICONWARNING
             );
         }
     }
