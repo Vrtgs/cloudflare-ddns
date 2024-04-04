@@ -21,7 +21,6 @@ use tokio::try_join;
 use crate::prelude::*;
 use crate::entity::*;
 use crate::retrying_client::RetryingClient;
-use err::{err, warn};
 use crate::config::Config;
 use crate::config::ip_source::GetIpError;
 use crate::network_listener::has_internet;
@@ -180,12 +179,12 @@ impl MessageBoxes {
 
     async fn error(&self, msg: impl Into<Cow<'static, str>>) {
         let msg = msg.into();
-        self.custom_error(move || err(&msg)).await
+        self.custom_error(move || err::err(&msg)).await
     }
     
     async fn warning(&self, msg: impl Into<Cow<'static, str>>) {
         let msg = msg.into();
-        self.custom_warning(move || warn(&msg)).await
+        self.custom_warning(move || err::warn(&msg)).await
     }
 }
 
