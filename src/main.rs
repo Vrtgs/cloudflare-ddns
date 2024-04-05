@@ -18,7 +18,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
 use tokio::try_join;
 use crate::entity::*;
-use crate::retrying_client::{AUTH_EMAIL, AUTH_KEY, AUTHORIZATION_EMAIL, AUTHORIZATION_KEY, RetryingClient};
+use crate::retrying_client::RetryingClient;
 use crate::config::Config;
 use crate::config::ip_source::GetIpError;
 use crate::network_listener::has_internet;
@@ -70,8 +70,6 @@ impl DdnsContext {
         
         Ok(
             cfg.authorize_request(self.client.get(url))
-                .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
-                .header(AUTHORIZATION_KEY, AUTH_KEY)
                 .send().await?
                 .json::<GetResponse>()
                 .await?
@@ -93,8 +91,6 @@ impl DdnsContext {
         };
 
         let response = cfg.authorize_request(self.client.patch(url))
-            .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
-            .header(AUTHORIZATION_KEY, AUTH_KEY)
             .json(request_json)
             .send().await?;
 
