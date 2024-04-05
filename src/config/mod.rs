@@ -27,6 +27,6 @@ impl Config {
 
 
     pub fn wasm_driver_path(&self) -> &Path {
-        self.0.ip_sources.driver_path.as_deref().unwrap_or(Path::new("./ddns-wasm-runtime.exe"))
+        self.0.ip_sources.driver_path.as_deref().unwrap_or(Path::new("./ddns-wasm-runtime.dll"))
     }
 }

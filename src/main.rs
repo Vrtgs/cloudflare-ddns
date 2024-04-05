@@ -27,30 +27,20 @@ use crate::network_listener::has_internet;
 use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
 use crate::util::new_skip_interval;
 
-macro_rules! patch_url {
-    ($record_id:expr) => {
-        format! { concat!(
-            "https://api.cloudflare.com/client/v4/zones/",
-            include_str!("./secret/zone-id"),
-            "/dns_records/{}"
-        ), $record_id }
-    };
-}
 
-macro_rules! static_headers {
-    ($(const $name: ident = $val: expr;)*) => {$(
+macro_rules! from_static {
+    ($(const $name: ident: $ty: ty = $val: expr;)*) => {$(
         #[allow(clippy::declare_interior_mutable_const)]
-        const $name: HeaderValue = HeaderValue::from_static($val);
+        const $name: $ty = <$ty>::from_static($val);
     )*};
 }
 
-static_headers! {
-    const AUTH_EMAIL = include_str!("secret/email");
-    const AUTH_KEY   = include_str!("secret/api-key");
+from_static! {
+    const AUTH_EMAIL: HeaderValue = include_str!("secret/email");
+    const AUTH_KEY  : HeaderValue = include_str!("secret/api-key");
+
+    const JSON_MIME: HeaderValue  = "application/json";
 }
-
-const RECORD: &str = include_str!("secret/record");
-
 
 mod prelude;
 mod entity;
@@ -68,7 +58,7 @@ struct DdnsContext {
 }
 
 impl DdnsContext {
-    async fn get_ip(&self, cfg: Config) -> Result<Ipv4Addr, GetIpError> {
+    async fn get_ip(&self, cfg: Config) -> anyhow::Result<Ipv4Addr> {
         let last_err = Cell::new(None);
 
         let iter = cfg.ip_sources().map(|x| x.resolve_ip(&self.client, &cfg));
@@ -85,22 +75,22 @@ impl DdnsContext {
             }));
 
         pin!(stream).next().await.ok_or_else(|| {
-            last_err.take().unwrap_or(GetIpError::NoIpSources)
+            last_err.take().unwrap_or(GetIpError::NoIpSources).into()
         })
     }
 
     async fn get_record(&self, _cfg: Config) -> anyhow::Result<OneOrLen<Record>> {
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={record}",
-            zone_id= include_str!("secret/zone-id"),
-            record = RECORD
+            zone_id= include_str!("./secret/zone-id"),
+            record = include_str!("./secret/record")
         );
         
         Ok(
             self.client.get(url)
                 .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
                 .header(AUTHORIZATION_KEY, AUTH_KEY)
-                .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+                .header(CONTENT_TYPE, JSON_MIME)
                 .send().await?
                 .json::<GetResponse>()
                 .await?
@@ -116,10 +106,16 @@ impl DdnsContext {
             proxied = false
         };
 
-        let response = self.client.patch(patch_url!(id))
+        let url = format! {
+            "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}",
+            zone_id = include_str!("./secret/zone-id"),
+            record_id = id
+        };
+
+        let response = self.client.patch(url)
             .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
             .header(AUTHORIZATION_KEY, AUTH_KEY)
-            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .header(CONTENT_TYPE, JSON_MIME)
             .body(data)
             .send().await?;
 
@@ -138,12 +134,12 @@ impl DdnsContext {
 
     pub async fn run_ddns(&self, cfg: Config) -> anyhow::Result<()> {
         let (current_ip, record) = try_join!(
-            async {Ok(self.get_ip(cfg.clone()).await?)}, self.get_record(cfg.clone())
+            self.get_ip(cfg.clone()), self.get_record(cfg.clone())
         )?;
         
         match record {
             OneOrLen::One(Record { id, ip, name}) => {
-                anyhow::ensure!(&*name == RECORD, "Expected {RECORD} found {name}");
+                anyhow::ensure!(&*name == include_str!("secret/record"), "Expected {} found {name}", include_str!("secret/record"));
 
                 match Ipv4Addr::from_str(&ip) {
                     Err(_) => self.message_boxes.warning(format!("cloudflare returned an invalid ip: {ip}")).await,
@@ -159,7 +155,6 @@ impl DdnsContext {
             OneOrLen::Len(len) => anyhow::bail!("Expected 1 record Got {len}")
         }
     }
-    
 }
 
 #[derive(Clone)]
