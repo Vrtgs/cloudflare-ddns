@@ -2,6 +2,7 @@ use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
 use crate::config::ip_source::{IpSource, Sources};
+use crate::retrying_client::RequestBuilder;
 
 pub mod ip_source;
 pub mod listener;
@@ -28,5 +29,9 @@ impl Config {
 
     pub fn wasm_driver_path(&self) -> &Path {
         self.0.ip_sources.driver_path.as_deref().unwrap_or(Path::new("./ddns-wasm-runtime.dll"))
+    }
+    
+    pub fn authorize_request(req: RequestBuilder) -> RequestBuilder {
+        todo!("am71")
     }
 }

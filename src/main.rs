@@ -101,8 +101,7 @@ impl DdnsContext {
     async fn update_record(&self, id: &str, ip: Ipv4Addr, _cfg: Config) -> anyhow::Result<()> {
         let data = format! {
             r###"{{"type":"A","name":"{record}","content":"{ip}","proxied":{proxied}}}"###,
-            ip = ip,
-            record = include_str!("./secret/record"),
+            record = include_str!("./secret/record").escape_default(),
             proxied = false
         };
 
