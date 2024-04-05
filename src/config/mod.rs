@@ -1,7 +1,10 @@
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
+use reqwest::header::CONTENT_TYPE;
+use crate::{AUTH_EMAIL, AUTH_KEY, JSON_MIME};
 use crate::config::ip_source::{IpSource, Sources};
+use crate::prelude::{AUTHORIZATION_EMAIL, AUTHORIZATION_KEY};
 use crate::retrying_client::RequestBuilder;
 
 pub mod ip_source;
@@ -31,7 +34,10 @@ impl Config {
         self.0.ip_sources.driver_path.as_deref().unwrap_or(Path::new("./ddns-wasm-runtime.dll"))
     }
     
-    pub fn authorize_request(&self, req: RequestBuilder) -> RequestBuilder {
-        req
+    pub fn authorize_request(request: RequestBuilder) -> RequestBuilder {
+        request
+            .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
+            .header(AUTHORIZATION_KEY, AUTH_KEY)
+            .header(CONTENT_TYPE, JSON_MIME)
     }
 }

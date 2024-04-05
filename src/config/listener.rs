@@ -42,27 +42,32 @@ impl DebounceEventHandler for FsEventHandler {
 
 
 async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: MessageBoxes) -> Result<()> {
-    let (rx, mut tx) = tokio::sync::watch::channel(Ok(vec![]));
+    let (tx, mut rx) = tokio::sync::watch::channel(Ok(vec![]));
     
     const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
     let _watcher = tokio::task::spawn_blocking(move || {
-        if !Path::new("./sources.toml").exists() {
-            std::fs::OpenOptions::new()
-                .write(true).read(true)
-                .create(true).truncate(false)
-                .open("./sources.toml")?;
+        macro_rules! exists_or_include {
+            ($path: expr, $default: expr) => {
+                if !Path::new($path).exists() {
+                    std::fs::write($path, include_str!($default))?;
+                }
+            };
         }
+        
+        exists_or_include!("./config/sources.toml", "../../default/gen/sources.toml");
+        exists_or_include!("./config/config.toml", "../../default/config.toml");
         
         let mut watcher = new_debouncer_opt::<_, RecommendedWatcher, _>(
             POLL_INTERVAL,
             None,
-            FsEventHandler(rx),
+            FsEventHandler(tx),
             FileIdMap::new(),
             notify::Config::default().with_compare_contents(true),
         )?;
 
-        watcher.watcher().watch(Path::new("./sources.toml"), RecursiveMode::NonRecursive)?;
+        watcher.watcher().watch(Path::new("./config/sources.toml"), RecursiveMode::NonRecursive)?;
+        watcher.watcher().watch(Path::new("./config/config.toml"), RecursiveMode::NonRecursive)?;
         Ok::<_, notify::Error>(watcher)
     }).await??;
     
@@ -83,9 +88,9 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
     
     loop {
         tokio::select! {
-            Ok(()) = tx.changed() => {
+            Ok(()) = rx.changed() => {
                 let events = {
-                    let borrow = tx.borrow_and_update();
+                    let borrow = rx.borrow_and_update();
                     borrow.as_ref().map_err(|e|{
                         e.iter().map(|e| format!("listen event error: {e}")).collect::<Vec<_>>()
                     }).map_err(|e| anyhow!("Error listening to config {e:?}")).cloned()
@@ -102,7 +107,7 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
                 if !events.is_empty() {
                     let res = async {
                         Sources::deserialize_async(
-                            &tokio::fs::read_to_string("./sources.toml").await?
+                            &tokio::fs::read_to_string("./config/sources.toml").await?
                         ).await
                     }.await;
                     
@@ -132,7 +137,7 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> ConfigStorage 
     let msg_bx_handle = updaters_manager.message_boxes().clone();
     let (updater, jh_entry) = updaters_manager.add_updater("config-listener");
     
-    let ip_sources = match Sources::from_file("./sources.toml").await {
+    let ip_sources = match Sources::from_file("./config/sources.toml").await {
         Ok(x) => x,
         Err(err) => {
             msg_bx_handle.warning(format!("{err}\n\n\n\n...Using default config...")).await;
