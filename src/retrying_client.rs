@@ -1,8 +1,27 @@
 use std::num::NonZeroU8;
 use std::time::Duration;
 use reqwest::{Body, Client, ClientBuilder, IntoUrl, Method, Request, Response};
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
 use crate::dbg_println;
+
+
+macro_rules! from_static {
+    ($($vis: vis const $name: ident: $ty: ty = $val: expr;)*) => {$(
+        #[allow(clippy::declare_interior_mutable_const)]
+        $vis const $name: $ty = <$ty>::from_static($val);
+    )*};
+}
+
+from_static! {
+    pub const AUTH_EMAIL: HeaderValue = include_str!("secret/email");
+    pub const AUTH_KEY  : HeaderValue = include_str!("secret/api-key");
+    
+    pub const AUTHORIZATION_EMAIL: HeaderName = "x-auth-email";
+    pub const AUTHORIZATION_KEY: HeaderName = "x-auth-key";
+    
+    const JSON_MIME: HeaderValue  = "application/json";
+}
+
 
 
 pub struct RequestBuilder {
@@ -22,6 +41,10 @@ impl RequestBuilder {
             *req.body_mut() = Some(body.into());
         }
         self
+    }
+
+    pub fn json(self, body: impl Into<Body>) -> RequestBuilder {
+        self.header(CONTENT_TYPE, JSON_MIME).body(body)
     }
 
     pub async fn send(self) -> reqwest::Result<Response> {

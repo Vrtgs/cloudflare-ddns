@@ -14,35 +14,17 @@ use std::thread;
 use std::time::Duration;
 use anyhow::Context;
 use futures::{StreamExt};
-use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
 use tokio::try_join;
-use crate::prelude::*;
 use crate::entity::*;
-use crate::retrying_client::RetryingClient;
+use crate::retrying_client::{AUTH_EMAIL, AUTH_KEY, AUTHORIZATION_EMAIL, AUTHORIZATION_KEY, RetryingClient};
 use crate::config::Config;
 use crate::config::ip_source::GetIpError;
 use crate::network_listener::has_internet;
 use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
 use crate::util::new_skip_interval;
 
-
-macro_rules! from_static {
-    ($(const $name: ident: $ty: ty = $val: expr;)*) => {$(
-        #[allow(clippy::declare_interior_mutable_const)]
-        const $name: $ty = <$ty>::from_static($val);
-    )*};
-}
-
-from_static! {
-    const AUTH_EMAIL: HeaderValue = include_str!("secret/email");
-    const AUTH_KEY  : HeaderValue = include_str!("secret/api-key");
-
-    const JSON_MIME: HeaderValue  = "application/json";
-}
-
-mod prelude;
 mod entity;
 mod retrying_client;
 mod err;
@@ -79,7 +61,7 @@ impl DdnsContext {
         })
     }
 
-    async fn get_record(&self, _cfg: Config) -> anyhow::Result<OneOrLen<Record>> {
+    async fn get_record(&self, cfg: Config) -> anyhow::Result<OneOrLen<Record>> {
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={record}",
             zone_id= include_str!("./secret/zone-id"),
@@ -87,10 +69,9 @@ impl DdnsContext {
         );
         
         Ok(
-            self.client.get(url)
+            cfg.authorize_request(self.client.get(url))
                 .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
                 .header(AUTHORIZATION_KEY, AUTH_KEY)
-                .header(CONTENT_TYPE, JSON_MIME)
                 .send().await?
                 .json::<GetResponse>()
                 .await?
@@ -98,8 +79,8 @@ impl DdnsContext {
         )
     }
 
-    async fn update_record(&self, id: &str, ip: Ipv4Addr, _cfg: Config) -> anyhow::Result<()> {
-        let data = format! {
+    async fn update_record(&self, id: &str, ip: Ipv4Addr, cfg: Config) -> anyhow::Result<()> {
+        let request_json = format! {
             r###"{{"type":"A","name":"{record}","content":"{ip}","proxied":{proxied}}}"###,
             record = include_str!("./secret/record").escape_default(),
             proxied = false
@@ -111,11 +92,10 @@ impl DdnsContext {
             record_id = id
         };
 
-        let response = self.client.patch(url)
+        let response = cfg.authorize_request(self.client.patch(url))
             .header(AUTHORIZATION_EMAIL, AUTH_EMAIL)
             .header(AUTHORIZATION_KEY, AUTH_KEY)
-            .header(CONTENT_TYPE, JSON_MIME)
-            .body(data)
+            .json(request_json)
             .send().await?;
 
         let failure = !response.status().is_success();

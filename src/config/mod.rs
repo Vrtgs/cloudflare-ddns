@@ -31,7 +31,7 @@ impl Config {
         self.0.ip_sources.driver_path.as_deref().unwrap_or(Path::new("./ddns-wasm-runtime.dll"))
     }
     
-    pub fn authorize_request(req: RequestBuilder) -> RequestBuilder {
-        todo!("am71")
+    pub fn authorize_request(&self, req: RequestBuilder) -> RequestBuilder {
+        req
     }
 }
