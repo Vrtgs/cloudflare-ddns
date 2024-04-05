@@ -104,7 +104,8 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
                     },
                 };
                 
-                if !events.is_empty() {
+                // TODO: AliMark71
+                if events.is_empty() {
                     let res = async {
                         Sources::deserialize_async(
                             &tokio::fs::read_to_string("./config/sources.toml").await?
@@ -113,7 +114,6 @@ async fn listen(cfg: Weak<ArcSwap<CfgMut>>, updater: &Updater, msg_bx_handle: Me
                     
                     match res {
                         Ok(ip_sources) => {
-                            // TODO: AliMark71
                             let Some(cfg) = Weak::upgrade(&cfg) else { break };
                             let new_cfg = CfgMut { ip_sources };
                             if new_cfg == **cfg.load() { continue }
