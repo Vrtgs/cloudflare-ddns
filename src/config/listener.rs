@@ -1,5 +1,5 @@
 use crate::config::ip_source::Sources;
-use crate::config::{CfgMut, Config};
+use crate::config::{ApiFields, CfgInner, Config};
 use crate::updaters::{Updater, UpdatersManager};
 use crate::MessageBoxes;
 use anyhow::anyhow;
@@ -9,6 +9,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{
     new_debouncer_opt, DebounceEventHandler, DebounceEventResult, FileIdMap,
 };
+use std::io;
 use std::path::Path;
 use std::pin::pin;
 use std::sync::{Arc, Weak};
@@ -16,7 +17,7 @@ use std::time::Duration;
 use tokio::task::AbortHandle;
 
 pub struct ConfigStorage {
-    cfg: Arc<ArcSwap<CfgMut>>,
+    cfg: Arc<ArcSwap<CfgInner>>,
     update_task: AbortHandle,
 }
 
@@ -42,7 +43,7 @@ impl DebounceEventHandler for FsEventHandler {
 }
 
 async fn listen(
-    cfg: Weak<ArcSwap<CfgMut>>,
+    cfg: Weak<ArcSwap<CfgInner>>,
     updater: &Updater,
     msg_bx_handle: MessageBoxes,
 ) -> Result<()> {
@@ -51,17 +52,6 @@ async fn listen(
     const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
     let _watcher = tokio::task::spawn_blocking(move || {
-        macro_rules! exists_or_include {
-            ($path: expr, $default: expr) => {
-                if !Path::new($path).exists() {
-                    std::fs::write($path, include_str!($default))?;
-                }
-            };
-        }
-
-        exists_or_include!("./config/sources.toml", "../../default/gen/sources.toml");
-        exists_or_include!("./config/config.toml", "../../default/config.toml");
-
         let mut watcher = new_debouncer_opt::<_, RecommendedWatcher, _>(
             POLL_INTERVAL,
             None,
@@ -78,7 +68,7 @@ async fn listen(
             Path::new("./config/config.toml"),
             RecursiveMode::NonRecursive,
         )?;
-        Ok::<_, notify::Error>(watcher)
+        anyhow::Ok(watcher)
     })
     .await??;
 
@@ -117,8 +107,11 @@ async fn listen(
                     },
                 };
 
-                // TODO: AliMark71
-                if events.is_empty() {
+                macro_rules! change_on_occurred {
+                    ($path:literal in $events:expr) => { $events.iter().any(|e| e.paths.iter().any(|p| p.ends_with($path))) };
+                }
+
+                if change_on_occurred!("sources.toml" in events) {
                     let res = async {
                         Sources::deserialize_async(
                             &tokio::fs::read_to_string("./config/sources.toml").await?
@@ -128,9 +121,28 @@ async fn listen(
                     match res {
                         Ok(ip_sources) => {
                             let Some(cfg) = Weak::upgrade(&cfg) else { break };
-                            let new_cfg = CfgMut { ip_sources };
-                            if new_cfg == **cfg.load() { continue }
+                            let old_cfg = cfg.load();
+                            if ip_sources == *old_cfg.ip_sources { continue }
 
+                            let new_cfg = CfgInner::new(Arc::clone(&old_cfg.api_fields), ip_sources);
+                            cfg.store(Arc::new(new_cfg));
+                            if updater.update().is_err() { break }
+                        }
+                        Err(e) => msg_bx_handle.warning(format!("config listen error: {e}")).await
+                    }
+                }
+
+                if change_on_occurred!("config.toml" in events) {
+                    let res = ApiFields::deserialize(&tokio::fs::read_to_string("./config/config.toml").await?);
+
+                    match res {
+                        Ok(api_fields) => {
+                            let Some(cfg) = Weak::upgrade(&cfg) else { break };
+                            let old_cfg = cfg.load();
+                            if api_fields == *old_cfg.api_fields { continue }
+
+
+                            let new_cfg = CfgInner::new(api_fields, Arc::clone(&old_cfg.ip_sources));
                             cfg.store(Arc::new(new_cfg));
                             if updater.update().is_err() { break }
                         }
@@ -146,9 +158,32 @@ async fn listen(
     anyhow::Ok(())
 }
 
-pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> ConfigStorage {
+pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> io::Result<ConfigStorage> {
     let msg_bx_handle = updaters_manager.message_boxes().clone();
     let (updater, jh_entry) = updaters_manager.add_updater("config-listener");
+
+    if !tokio::fs::try_exists("./config").await? {
+        tokio::fs::create_dir_all("./config").await?;
+    }
+    if !tokio::fs::metadata("./config").await?.is_dir() {
+        return Err(io::Error::other("./config is not a directory"));
+    }
+
+    macro_rules! exists_or_include {
+        ($($path: expr, $default: expr);*) => {
+            tokio::try_join!($(async {
+                if !tokio::fs::try_exists($path).await? {
+                    tokio::fs::write($path, include_str!($default)).await?;
+                }
+                Ok::<_, io::Error>(())
+            }),*)
+        };
+    }
+
+    exists_or_include!(
+        "./config/sources.toml", "../../default/gen/sources.toml";
+        "./config/config.toml", "../../default/config.toml"
+    )?;
 
     let ip_sources = match Sources::from_file("./config/sources.toml").await {
         Ok(x) => x,
@@ -160,7 +195,14 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> ConfigStorage 
         }
     };
 
-    let cfg = Arc::new(ArcSwap::new(Arc::new(CfgMut { ip_sources })));
+    let api_fields = match ApiFields::from_file("./config/config.toml").await {
+        Ok(x) => x,
+        Err(err) => panic!("{err}\n\n\n\n...Invalid API Config, Exiting..."),
+    };
+
+    let cfg = Arc::new(ArcSwap::new(Arc::new(CfgInner::new(
+        api_fields, ip_sources,
+    ))));
     let cfg_weak = Arc::downgrade(&cfg);
 
     let update_task = tokio::spawn(async move {
@@ -171,8 +213,8 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> ConfigStorage 
 
     jh_entry.insert(update_task);
 
-    ConfigStorage {
+    Ok(ConfigStorage {
         cfg,
         update_task: abort,
-    }
+    })
 }

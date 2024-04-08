@@ -12,9 +12,6 @@ macro_rules! from_static {
 }
 
 from_static! {
-    pub const AUTH_EMAIL: HeaderValue = include_str!("secret/email");
-    pub const AUTH_KEY  : HeaderValue = include_str!("secret/api-key");
-
     pub const AUTHORIZATION_EMAIL: HeaderName = "x-auth-email";
     pub const AUTHORIZATION_KEY: HeaderName = "x-auth-key";
 
@@ -59,7 +56,7 @@ pub struct RetryingClient {
 
 const MAX_RETRY: NonZeroU8 = match NonZeroU8::new(8) {
     Some(s) => s,
-    None => std::panic!("Invalid MAX_RETRY"),
+    None => panic!("Invalid MAX_RETRY"),
 };
 
 impl RetryingClient {

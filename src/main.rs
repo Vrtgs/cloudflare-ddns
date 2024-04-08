@@ -71,8 +71,8 @@ impl DdnsContext {
     async fn get_record(&self, cfg: &Config) -> anyhow::Result<Record> {
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={record}",
-            zone_id = include_str!("./secret/zone-id"),
-            record = include_str!("./secret/record")
+            zone_id = cfg.zone().id(),
+            record = cfg.zone().record()
         );
 
         #[derive(Debug, Deserialize)]
@@ -100,9 +100,9 @@ impl DdnsContext {
             .map_err(|vec| anyhow!("expected 1 record got {} records: {vec:?}", vec.len()))?;
 
         anyhow::ensure!(
-            &*name == include_str!("secret/record"),
+            &*name == cfg.zone().record(),
             "Expected {} found {name}",
-            include_str!("secret/record")
+            cfg.zone().record()
         );
 
         Ok(Record { id, ip })
@@ -111,13 +111,13 @@ impl DdnsContext {
     async fn update_record(&self, id: &str, ip: Ipv4Addr, cfg: &Config) -> anyhow::Result<()> {
         let request_json = format! {
             r###"{{"type":"A","name":"{record}","content":"{ip}","proxied":{proxied}}}"###,
-            record = include_str!("./secret/record").escape_json(),
-            proxied = false
+            record = cfg.zone().record().escape_json(),
+            proxied = cfg.zone().proxied()
         };
 
         let url = format! {
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}",
-            zone_id = include_str!("./secret/zone-id"),
+            zone_id = cfg.zone().id(),
             record_id = id
         };
 
@@ -152,13 +152,12 @@ impl DdnsContext {
     pub async fn run_ddns(&self, cfg: Config) -> anyhow::Result<()> {
         let (record, current_ip) = try_join!(self.get_record(&cfg), self.get_ip(&cfg))?;
 
-        let Record { id, ip } = record;
-        if ip == current_ip {
+        if record.ip == current_ip {
             dbg_println!("IP didn't change skipping record update");
             return Ok(());
         }
 
-        self.update_record(&id, current_ip, &cfg).await
+        self.update_record(&record.id, current_ip, &cfg).await
     }
 }
 
@@ -207,7 +206,7 @@ async fn real_main() -> Action {
     err::exit::subscribe(&mut updaters_manager);
     network_listener::subscribe(&mut updaters_manager);
     console_listener::subscribe(&mut updaters_manager);
-    let cfg_store = config::listener::subscribe(&mut updaters_manager).await;
+    let cfg_store = config::listener::subscribe(&mut updaters_manager).await.expect("unable to create config defaults");
 
     // 1 hour
     // this will be controlled by config

@@ -275,8 +275,8 @@ async fn into_process(mut steps: Vec<ProcessStep>) -> Result<Process, io::Error>
 #[derive(PartialOrd, PartialEq, Ord, Eq)]
 pub struct Sources {
     sources: BTreeMap<Url, Process>,
-    pub(crate) driver_path: Option<Box<Path>>,
-    pub(crate) concurrent_resolve: Option<NonZeroU8>,
+    pub(crate) driver_path: Box<Path>,
+    pub(crate) concurrent_resolve: NonZeroU8,
 }
 
 impl Sources {
@@ -304,8 +304,11 @@ impl Sources {
             .await
             .map(|sources| Sources {
                 sources,
-                driver_path,
-                concurrent_resolve,
+                driver_path: driver_path
+                    .unwrap_or_else(|| Box::from(Path::new("./ddns-wasm-runtime.dll"))),
+                // safety: 16 is not = to 0, lol
+                concurrent_resolve: concurrent_resolve
+                    .unwrap_or(unsafe { NonZeroU8::new_unchecked(16) }),
             })
     }
 
@@ -386,12 +389,15 @@ impl Debug for Sources {
             .entries(self.sources.iter().map(|(url, p)| (url.as_str(), p)))
             .entries(
                 self.driver_path
-                    .as_deref()
-                    .map(|path| ("driver-path", path)),
+                    .deref()
+                    .ne(Path::new("./ddns-wasm-runtime.dll"))
+                    .then(|| ("driver-path", &*self.driver_path)),
             )
             .entries(
                 self.concurrent_resolve
-                    .map(|num| ("concurrent-resolve", num)),
+                    .get()
+                    .ne(&16)
+                    .then(|| ("concurrent-resolve", self.concurrent_resolve)),
             )
             .finish()
     }

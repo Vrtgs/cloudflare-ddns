@@ -3,3 +3,4 @@ target
 /src/api-key
 /src/secret
 /default/gen
+/config

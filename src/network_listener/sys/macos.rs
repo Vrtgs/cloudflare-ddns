@@ -2,10 +2,6 @@
 
 use crate::dbg_println;
 use crate::updaters::Updater;
-use core_foundation::runloop::CFRunLoop;
-use core_foundation::string::CFString;
-use core_foundation_sys::runloop::kCFRunLoopDefaultMode;
-use core_foundation_sys::string::CFStringRef;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use system_configuration::network_reachability::{
