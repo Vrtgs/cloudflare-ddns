@@ -8,24 +8,22 @@ use std::cell::Cell;
 use std::net::Ipv4Addr;
 use std::pin::pin;
 use std::process::ExitCode;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use futures::{StreamExt};
+use serde::Deserialize;
 use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
 use tokio::try_join;
-use crate::entity::*;
 use crate::retrying_client::RetryingClient;
 use crate::config::Config;
 use crate::config::ip_source::GetIpError;
 use crate::network_listener::has_internet;
 use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
-use crate::util::new_skip_interval;
+use crate::util::{EscapeExt, new_skip_interval, num_cpus};
 
-mod entity;
 mod retrying_client;
 mod err;
 mod network_listener;
@@ -39,11 +37,17 @@ struct DdnsContext {
     message_boxes: MessageBoxes
 }
 
+#[derive(Debug)]
+struct Record {
+    id: Box<str>,
+    ip: Ipv4Addr,
+}
+
 impl DdnsContext {
-    async fn get_ip(&self, cfg: Config) -> anyhow::Result<Ipv4Addr> {
+    async fn get_ip(&self, cfg: &Config) -> anyhow::Result<Ipv4Addr> {
         let last_err = Cell::new(None);
 
-        let iter = cfg.ip_sources().map(|x| x.resolve_ip(&self.client, &cfg));
+        let iter = cfg.ip_sources().map(|x| x.resolve_ip(&self.client, cfg));
         let stream = futures::stream::iter(iter)
             .buffer_unordered(cfg.concurrent_resolve().get() as usize)
             .filter_map(|x| std::future::ready({
@@ -61,26 +65,44 @@ impl DdnsContext {
         })
     }
 
-    async fn get_record(&self, cfg: Config) -> anyhow::Result<OneOrLen<Record>> {
+    async fn get_record(&self, cfg: &Config) -> anyhow::Result<Record> {
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={record}",
             zone_id= include_str!("./secret/zone-id"),
             record = include_str!("./secret/record")
         );
         
-        Ok(
-            cfg.authorize_request(self.client.get(url))
-                .send().await?
-                .json::<GetResponse>()
-                .await?
-                .result
-        )
+        #[derive(Debug, Deserialize)]
+        struct FullRecord {
+            id: Box<str>,
+            name: Box<str>,
+            #[serde(rename = "content")]
+            ip: Ipv4Addr,
+        }
+        
+        #[derive(Debug, Deserialize)]
+        pub struct GetResponse {
+            result: Vec<FullRecord>
+        }
+        
+        let records = cfg.authorize_request(self.client.get(url))
+            .send().await?
+            .json::<GetResponse>()
+            .await?
+            .result;
+        
+        let [FullRecord { id, ip, name }] = <[FullRecord; 1]>::try_from(records)
+            .map_err(|vec| anyhow!("expected 1 record got {} records: {vec:?}", vec.len()))?;
+
+        anyhow::ensure!(&*name == include_str!("secret/record"), "Expected {} found {name}", include_str!("secret/record"));
+
+        Ok(Record { id, ip })
     }
 
-    async fn update_record(&self, id: &str, ip: Ipv4Addr, cfg: Config) -> anyhow::Result<()> {
+    async fn update_record(&self, id: &str, ip: Ipv4Addr, cfg: &Config) -> anyhow::Result<()> {
         let request_json = format! {
             r###"{{"type":"A","name":"{record}","content":"{ip}","proxied":{proxied}}}"###,
-            record = include_str!("./secret/record").escape_default(),
+            record = include_str!("./secret/record").escape_json(),
             proxied = false
         };
 
@@ -97,6 +119,11 @@ impl DdnsContext {
         let failure = !response.status().is_success();
 
         let bytes = response.bytes().await.with_context(|| "unable to retrieve bytes")?;
+
+        #[derive(Debug, Deserialize)]
+        pub struct PatchResponse {
+            success: bool
+        }
         
         let response = serde_json::from_slice::<PatchResponse>(&bytes)
             .with_context(|| "unable to deserialize patch response json")?;
@@ -104,31 +131,22 @@ impl DdnsContext {
         if failure || !response.success {
             anyhow::bail!("Bad response: {}", String::from_utf8_lossy(&bytes))
         }
+        
         Ok(())
     }
 
     pub async fn run_ddns(&self, cfg: Config) -> anyhow::Result<()> {
-        let (current_ip, record) = try_join!(
-            self.get_ip(cfg.clone()), self.get_record(cfg.clone())
+        let (record, current_ip) = try_join!(
+            self.get_record(&cfg), self.get_ip(&cfg)
         )?;
         
-        match record {
-            OneOrLen::One(Record { id, ip, name}) => {
-                anyhow::ensure!(&*name == include_str!("secret/record"), "Expected {} found {name}", include_str!("secret/record"));
-
-                match Ipv4Addr::from_str(&ip) {
-                    Err(_) => self.message_boxes.warning(format!("cloudflare returned an invalid ip: {ip}")).await,
-                    Ok(ip) if ip == current_ip => {
-                        dbg_println!("IP didn't change skipping record update");
-                        return Ok(());
-                    },
-                    Ok(_)  => {}
-                }
-
-                self.update_record(&id, current_ip, cfg).await
-            },
-            OneOrLen::Len(len) => anyhow::bail!("Expected 1 record Got {len}")
+        let Record { id, ip } = record;
+        if ip == current_ip {
+            dbg_println!("IP didn't change skipping record update");
+            return Ok(());
         }
+
+        self.update_record(&id, current_ip, &cfg).await
     }
 }
 
@@ -179,11 +197,9 @@ async fn real_main() -> Action {
     console_listener::subscribe(&mut updaters_manager);
     let cfg_store = config::listener::subscribe(&mut updaters_manager).await;
 
-
     // 1 hour
     // this will be controlled by config
     let mut interval = new_skip_interval(Duration::from_secs(60 * 60));
-    
     
     loop {
         tokio::select! {
@@ -223,13 +239,14 @@ async fn real_main() -> Action {
 #[cfg(feature = "trace")] 
 fn make_runtime() -> Runtime {
     tokio::runtime::Builder::new_current_thread()
-        .enable_all().build().expect("failed ot build runtime")
+        .enable_all().build().expect("failed to build runtime")
 }
 
 #[cfg(not(feature = "trace"))]
 fn make_runtime() -> Runtime {
     tokio::runtime::Builder::new_multi_thread()
-        .enable_all().build().expect("failed ot build runtime")
+        .worker_threads(num_cpus().get())
+        .enable_all().build().expect("failed to build runtime")
 }
 
 fn main() -> ExitCode {
