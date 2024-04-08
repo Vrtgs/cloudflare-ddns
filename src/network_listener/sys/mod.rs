@@ -1,9 +1,12 @@
-#[cfg(windows)] mod windows;
-#[cfg(windows)] use windows as sys;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows as sys;
 
-#[cfg(target_os = "macos")] mod macos;
-#[cfg(target_os = "macos")] use macos as sys;
-
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as sys;
 
 pub use sys::has_internet;
 

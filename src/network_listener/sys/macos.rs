@@ -1,18 +1,19 @@
 #![cfg(target_os = "macos")]
 
-
-use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use crate::dbg_println;
+use crate::updaters::Updater;
 use core_foundation::runloop::CFRunLoop;
 use core_foundation::string::CFString;
 use core_foundation_sys::runloop::kCFRunLoopDefaultMode;
 use core_foundation_sys::string::CFStringRef;
-use system_configuration::network_reachability::{ReachabilityFlags, SchedulingError, SCNetworkReachability, SetCallbackError};
-use tokio::sync::Notify;
+use std::future::Future;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use system_configuration::network_reachability::{
+    ReachabilityFlags, SCNetworkReachability, SchedulingError, SetCallbackError,
+};
 use tokio::runtime::Handle as TokioHandle;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use crate::dbg_println;
-use crate::updaters::Updater;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UpdaterError {
@@ -26,7 +27,9 @@ pub enum UpdaterError {
 #[must_use = "its useless to check if we have internet if you dont use it"]
 pub async fn has_internet() -> bool {
     let sc = SCNetworkReachability::from(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
-    sc.reachability().map(has_internet_from_flags).unwrap_or(false)
+    sc.reachability()
+        .map(has_internet_from_flags)
+        .unwrap_or(false)
 }
 
 fn has_internet_from_flags(flags: ReachabilityFlags) -> bool {
@@ -35,8 +38,8 @@ fn has_internet_from_flags(flags: ReachabilityFlags) -> bool {
     }
     if !flags.contains(ReachabilityFlags::CONNECTION_REQUIRED)
         || ((flags.contains(ReachabilityFlags::CONNECTION_ON_DEMAND)
-        || flags.contains(ReachabilityFlags::CONNECTION_ON_TRAFFIC))
-        && !flags.contains(ReachabilityFlags::INTERVENTION_REQUIRED))
+            || flags.contains(ReachabilityFlags::CONNECTION_ON_TRAFFIC))
+            && !flags.contains(ReachabilityFlags::INTERVENTION_REQUIRED))
     {
         return true;
     }
@@ -46,7 +49,10 @@ fn has_internet_from_flags(flags: ReachabilityFlags) -> bool {
     false
 }
 
-fn listen<F: Fn() + Sync, S: Future>(notify_callback: F, shutdown: S) -> Result<S::Output, UpdaterError> {
+fn listen<F: Fn() + Sync, S: Future>(
+    notify_callback: F,
+    shutdown: S,
+) -> Result<S::Output, UpdaterError> {
     let mut sc = SCNetworkReachability::from(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
     sc.set_callback(|flags| {
         if has_internet_from_flags(flags) {

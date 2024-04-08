@@ -11,10 +11,9 @@ pub fn num_cpus() -> NonZeroUsize {
     #[cold]
     #[inline(never)]
     fn num_cpus_uncached() -> NonZeroUsize {
-        std::thread::available_parallelism()
-            .unwrap_or(NonZeroUsize::MIN)
+        std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN)
     }
-    
+
     *NUM_CPUS.get_or_init(num_cpus_uncached)
 }
 
@@ -32,7 +31,6 @@ pub fn new_skip_interval_at(start: Instant, period: Duration) -> Interval {
     interval
 }
 
-
 pub struct EscapeJson<'a>(&'a str);
 
 impl<'a> Display for EscapeJson<'a> {
@@ -47,7 +45,7 @@ impl<'a> Display for EscapeJson<'a> {
                 '\t' => f.write_str("\\t"),
                 '"' => f.write_str("\\\""),
                 '\\' => f.write_str("\\"),
-                ' ' => f.write_char(' '), 
+                ' ' => f.write_char(' '),
                 c if c.is_ascii_graphic() => f.write_char(c),
                 c => {
                     let encoded = c.encode_utf16(&mut utf16_buf);
@@ -58,7 +56,7 @@ impl<'a> Display for EscapeJson<'a> {
                 }
             }?
         }
-        
+
         Ok(())
     }
 }

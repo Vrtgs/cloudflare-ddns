@@ -3,6 +3,15 @@
 
 extern crate core;
 
+use crate::config::ip_source::GetIpError;
+use crate::config::Config;
+use crate::network_listener::has_internet;
+use crate::retrying_client::RetryingClient;
+use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
+use crate::util::{new_skip_interval, num_cpus, EscapeExt};
+use anyhow::{anyhow, Context};
+use futures::StreamExt;
+use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::net::Ipv4Addr;
@@ -11,30 +20,21 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use anyhow::{anyhow, Context};
-use futures::{StreamExt};
-use serde::Deserialize;
 use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
 use tokio::try_join;
-use crate::retrying_client::RetryingClient;
-use crate::config::Config;
-use crate::config::ip_source::GetIpError;
-use crate::network_listener::has_internet;
-use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
-use crate::util::{EscapeExt, new_skip_interval, num_cpus};
 
-mod retrying_client;
+mod config;
+mod console_listener;
 mod err;
 mod network_listener;
-mod console_listener;
+mod retrying_client;
 mod updaters;
-mod config;
 mod util;
 
 struct DdnsContext {
     client: RetryingClient,
-    message_boxes: MessageBoxes
+    message_boxes: MessageBoxes,
 }
 
 #[derive(Debug)]
@@ -50,28 +50,31 @@ impl DdnsContext {
         let iter = cfg.ip_sources().map(|x| x.resolve_ip(&self.client, cfg));
         let stream = futures::stream::iter(iter)
             .buffer_unordered(cfg.concurrent_resolve().get() as usize)
-            .filter_map(|x| std::future::ready({
-                match x {
-                    Ok(x) => Some(x),
-                    Err(err) => {
-                        last_err.set(Some(err));
-                        None
+            .filter_map(|x| {
+                std::future::ready({
+                    match x {
+                        Ok(x) => Some(x),
+                        Err(err) => {
+                            last_err.set(Some(err));
+                            None
+                        }
                     }
-                }
-            }));
+                })
+            });
 
-        pin!(stream).next().await.ok_or_else(|| {
-            last_err.take().unwrap_or(GetIpError::NoIpSources).into()
-        })
+        pin!(stream)
+            .next()
+            .await
+            .ok_or_else(|| last_err.take().unwrap_or(GetIpError::NoIpSources).into())
     }
 
     async fn get_record(&self, cfg: &Config) -> anyhow::Result<Record> {
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={record}",
-            zone_id= include_str!("./secret/zone-id"),
+            zone_id = include_str!("./secret/zone-id"),
             record = include_str!("./secret/record")
         );
-        
+
         #[derive(Debug, Deserialize)]
         struct FullRecord {
             id: Box<str>,
@@ -79,22 +82,28 @@ impl DdnsContext {
             #[serde(rename = "content")]
             ip: Ipv4Addr,
         }
-        
+
         #[derive(Debug, Deserialize)]
         pub struct GetResponse {
-            result: Vec<FullRecord>
+            result: Vec<FullRecord>,
         }
-        
-        let records = cfg.authorize_request(self.client.get(url))
-            .send().await?
+
+        let records = cfg
+            .authorize_request(self.client.get(url))
+            .send()
+            .await?
             .json::<GetResponse>()
             .await?
             .result;
-        
+
         let [FullRecord { id, ip, name }] = <[FullRecord; 1]>::try_from(records)
             .map_err(|vec| anyhow!("expected 1 record got {} records: {vec:?}", vec.len()))?;
 
-        anyhow::ensure!(&*name == include_str!("secret/record"), "Expected {} found {name}", include_str!("secret/record"));
+        anyhow::ensure!(
+            &*name == include_str!("secret/record"),
+            "Expected {} found {name}",
+            include_str!("secret/record")
+        );
 
         Ok(Record { id, ip })
     }
@@ -112,34 +121,37 @@ impl DdnsContext {
             record_id = id
         };
 
-        let response = cfg.authorize_request(self.client.patch(url))
+        let response = cfg
+            .authorize_request(self.client.patch(url))
             .json(request_json)
-            .send().await?;
+            .send()
+            .await?;
 
         let failure = !response.status().is_success();
 
-        let bytes = response.bytes().await.with_context(|| "unable to retrieve bytes")?;
+        let bytes = response
+            .bytes()
+            .await
+            .with_context(|| "unable to retrieve bytes")?;
 
         #[derive(Debug, Deserialize)]
         pub struct PatchResponse {
-            success: bool
+            success: bool,
         }
-        
+
         let response = serde_json::from_slice::<PatchResponse>(&bytes)
             .with_context(|| "unable to deserialize patch response json")?;
 
         if failure || !response.success {
             anyhow::bail!("Bad response: {}", String::from_utf8_lossy(&bytes))
         }
-        
+
         Ok(())
     }
 
     pub async fn run_ddns(&self, cfg: Config) -> anyhow::Result<()> {
-        let (record, current_ip) = try_join!(
-            self.get_record(&cfg), self.get_ip(&cfg)
-        )?;
-        
+        let (record, current_ip) = try_join!(self.get_record(&cfg), self.get_ip(&cfg))?;
+
         let Record { id, ip } = record;
         if ip == current_ip {
             dbg_println!("IP didn't change skipping record update");
@@ -153,7 +165,7 @@ impl DdnsContext {
 #[derive(Clone)]
 struct MessageBoxes {
     errors_semaphore: Arc<Semaphore>,
-    warning_semaphore: Arc<Semaphore>
+    warning_semaphore: Arc<Semaphore>,
 }
 
 impl MessageBoxes {
@@ -169,7 +181,7 @@ impl MessageBoxes {
         let msg = msg.into();
         self.custom_error(move || err::err(&msg)).await
     }
-    
+
     async fn warning(&self, msg: impl Into<Cow<'static, str>>) {
         let msg = msg.into();
         self.custom_warning(move || err::warn(&msg)).await
@@ -178,7 +190,7 @@ impl MessageBoxes {
 
 enum Action {
     Restart,
-    Exit(u8)
+    Exit(u8),
 }
 
 async fn real_main() -> Action {
@@ -186,8 +198,8 @@ async fn real_main() -> Action {
         client: RetryingClient::new(),
         message_boxes: MessageBoxes {
             errors_semaphore: Arc::new(Semaphore::new(5)),
-            warning_semaphore: Arc::new(Semaphore::new(5))
-        }
+            warning_semaphore: Arc::new(Semaphore::new(5)),
+        },
     };
 
     let mut updaters_manager = UpdatersManager::new(ctx.message_boxes.clone());
@@ -200,7 +212,7 @@ async fn real_main() -> Action {
     // 1 hour
     // this will be controlled by config
     let mut interval = new_skip_interval(Duration::from_secs(60 * 60));
-    
+
     loop {
         tokio::select! {
             _ = interval.tick() => {
@@ -208,7 +220,7 @@ async fn real_main() -> Action {
                     dbg_println!("no internet available skipping update");
                     continue;
                 }
-                
+
                 dbg_println!("updating");
                 match ctx.run_ddns(cfg_store.load_config()).await {
                     Err(panic) => ctx.message_boxes.error(panic.to_string()).await,
@@ -233,36 +245,40 @@ async fn real_main() -> Action {
             }
         }
     }
-
 }
 
-#[cfg(feature = "trace")] 
+#[cfg(feature = "trace")]
 fn make_runtime() -> Runtime {
     tokio::runtime::Builder::new_current_thread()
-        .enable_all().build().expect("failed to build runtime")
+        .enable_all()
+        .build()
+        .expect("failed to build runtime")
 }
 
 #[cfg(not(feature = "trace"))]
 fn make_runtime() -> Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(num_cpus().get())
-        .enable_all().build().expect("failed to build runtime")
+        .enable_all()
+        .build()
+        .expect("failed to build runtime")
 }
 
 fn main() -> ExitCode {
     err::set_hook();
-    #[cfg(feature = "trace")] console_subscriber::init();
+    #[cfg(feature = "trace")]
+    console_subscriber::init();
 
     let runtime = make_runtime();
     loop {
         let exit = std::panic::catch_unwind(|| runtime.block_on(real_main()));
-        
+
         match exit {
             Ok(Action::Exit(exit)) => {
                 dbg_println!("Shutting down the runtime...");
                 drop(runtime);
                 dbg_println!("Exiting...");
-                return ExitCode::from(exit)
+                return ExitCode::from(exit);
             }
             Ok(Action::Restart) => dbg_println!("Restarting..."),
             Err(_) => {

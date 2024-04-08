@@ -1,9 +1,8 @@
+use crate::dbg_println;
+use reqwest::header::{HeaderName, HeaderValue, CONTENT_TYPE};
+use reqwest::{Body, Client, ClientBuilder, IntoUrl, Method, Request, Response};
 use std::num::NonZeroU8;
 use std::time::Duration;
-use reqwest::{Body, Client, ClientBuilder, IntoUrl, Method, Request, Response};
-use reqwest::header::{CONTENT_TYPE, HeaderName, HeaderValue};
-use crate::dbg_println;
-
 
 macro_rules! from_static {
     ($($vis: vis const $name: ident: $ty: ty = $val: expr;)*) => {$(
@@ -15,18 +14,16 @@ macro_rules! from_static {
 from_static! {
     pub const AUTH_EMAIL: HeaderValue = include_str!("secret/email");
     pub const AUTH_KEY  : HeaderValue = include_str!("secret/api-key");
-    
+
     pub const AUTHORIZATION_EMAIL: HeaderName = "x-auth-email";
     pub const AUTHORIZATION_KEY: HeaderName = "x-auth-key";
-    
+
     const JSON_MIME: HeaderValue  = "application/json";
 }
 
-
-
 pub struct RequestBuilder {
     client: RetryingClient,
-    req: reqwest::Result<Request>
+    req: reqwest::Result<Request>,
 }
 
 impl RequestBuilder {
@@ -50,19 +47,19 @@ impl RequestBuilder {
     pub async fn send(self) -> reqwest::Result<Response> {
         match self.req {
             Ok(req) => self.client.execute(req).await,
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         }
     }
 }
 
 #[derive(Clone)]
 pub struct RetryingClient {
-    client: Client
+    client: Client,
 }
 
 const MAX_RETRY: NonZeroU8 = match NonZeroU8::new(8) {
     Some(s) => s,
-    None => std::panic!("Invalid MAX_RETRY")
+    None => std::panic!("Invalid MAX_RETRY"),
 };
 
 impl RetryingClient {
@@ -74,12 +71,13 @@ impl RetryingClient {
 
         #[cfg(not(feature = "trace"))]
         const IDLE_TIMEOUT: Option<Duration> = TIMEOUT.checked_mul(MAX_RETRY.get() as u32);
-        
+
         let builder = ClientBuilder::new();
         #[cfg(feature = "trace")]
         let builder = builder.pool_max_idle_per_host(0);
 
-        builder.timeout(TIMEOUT)
+        builder
+            .timeout(TIMEOUT)
             .pool_idle_timeout(IDLE_TIMEOUT)
             .use_rustls_tls()
             .build()
@@ -99,23 +97,30 @@ impl RetryingClient {
 
     /// See [`Client::request`]
     pub fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
-        RequestBuilder { client: self.clone(), req: url.into_url().map(|url| Request::new(method, url)) }
+        RequestBuilder {
+            client: self.clone(),
+            req: url.into_url().map(|url| Request::new(method, url)),
+        }
     }
 
     /// See [`Client::execute`]
     pub async fn execute(&self, req: Request) -> reqwest::Result<Response> {
         let mut i = 0_u8;
         loop {
-            if i >= (MAX_RETRY.get() - 1) { break }
+            if i >= (MAX_RETRY.get() - 1) {
+                break;
+            }
 
             if let Some(req) = req.try_clone() {
                 match self.client.execute(req).await {
                     Ok(resp) => return Ok(resp),
-                    Err(_) => tokio::time::sleep(
-                        Duration::from_secs(45 * (i/2).max(1) as u64)
-                    ).await,
+                    Err(_) => {
+                        tokio::time::sleep(Duration::from_secs(45 * (i / 2).max(1) as u64)).await
+                    }
                 }
-            } else { break dbg_println!("tried to use a streaming request") }
+            } else {
+                break dbg_println!("tried to use a streaming request");
+            }
 
             i += 1
         }

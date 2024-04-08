@@ -1,13 +1,13 @@
 mod driver;
 
+use crate::util::new_skip_interval_after;
+use anyhow::Result;
+pub use driver::WasmDriver;
 use std::path::Path;
 use std::sync::Once;
 use std::thread;
-use std::time::{Duration};
-use anyhow::Result;
+use std::time::Duration;
 use tokio::sync::{OnceCell, RwLock};
-pub use driver::WasmDriver;
-use crate::util::new_skip_interval_after;
 
 pub static WASM_DRIVER: RwLock<OnceCell<WasmDriver>> = RwLock::const_new(OnceCell::const_new());
 
@@ -36,8 +36,9 @@ pub(crate) fn __init_cleanup_routine() {
                     }
                 }
             };
-            
-            tokio::runtime::Builder::new_current_thread().enable_time()
+
+            tokio::runtime::Builder::new_current_thread()
+                .enable_time()
                 .build()
                 .unwrap()
                 .block_on(main)

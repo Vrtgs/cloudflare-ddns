@@ -1,6 +1,19 @@
 mod wasm;
 
-use thiserror::Error;
+use crate::config::ip_source::wasm::with_wasm_driver;
+use crate::config::Config;
+use crate::retrying_client::RetryingClient;
+use crate::util::num_cpus;
+use anyhow::Result;
+use bytes::Bytes;
+use futures::task::noop_waker_ref;
+use futures::{StreamExt, TryStreamExt};
+use serde::de::{Error, MapAccess, SeqAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::de::SliceRead;
+use serde_json::Deserializer as JsonDeserializer;
+use simdutf8::basic::Utf8Error;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter, Write};
@@ -9,28 +22,15 @@ use std::io::ErrorKind;
 use std::net::{AddrParseError, Ipv4Addr};
 use std::num::NonZeroU8;
 use std::ops::Deref;
-use tokio::io;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use serde_json::{Deserializer as JsonDeserializer};
-use futures::{StreamExt, TryStreamExt};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::de::{Error, MapAccess, SeqAccess, Visitor};
+use thiserror::Error;
+use tokio::io;
 use toml::map::Map;
 use toml::Value;
 use url::Url;
-use anyhow::Result;
-use bytes::Bytes;
-use futures::task::noop_waker_ref;
-use serde::ser::SerializeMap;
-use serde_json::de::SliceRead;
-use simdutf8::basic::Utf8Error;
-use crate::config::Config;
-use crate::config::ip_source::wasm::with_wasm_driver;
-use crate::retrying_client::RetryingClient;
-use crate::util::num_cpus;
 
 #[derive(Debug, Error)]
 pub enum GetIpError {
@@ -46,15 +46,20 @@ pub enum GetIpError {
     InvalidIp(#[from] AddrParseError),
     #[error("There is no ip source to get our ip from")]
     NoIpSources,
-    #[error("Ip source specified a wasm transformation step, but there was no wasm driver specified")]
-    NoWasmDriver
+    #[error(
+        "Ip source specified a wasm transformation step, but there was no wasm driver specified"
+    )]
+    NoWasmDriver,
 }
 
 #[derive(PartialOrd, PartialEq, Ord, Eq)]
 pub struct StrOrBytes(pub Box<[u8]>);
 
 impl<'de> Deserialize<'de> for StrOrBytes {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
         struct StrBytesVisitor;
 
         impl<'de> Visitor<'de> for StrBytesVisitor {
@@ -65,24 +70,30 @@ impl<'de> Deserialize<'de> for StrOrBytes {
             }
 
             #[inline(always)]
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: Error {
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
                 self.visit_bytes(v.as_bytes())
             }
 
-            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E> where E: Error {
+            fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+            where
+                E: Error,
+            {
                 Ok(StrOrBytes(Box::from(v)))
             }
 
-
             #[inline(always)]
-            fn visit_byte_buf<E>(self, v: Vec<u8>) -> std::result::Result<Self::Value, E> where E: Error {
+            fn visit_byte_buf<E>(self, v: Vec<u8>) -> std::result::Result<Self::Value, E>
+            where
+                E: Error,
+            {
                 Ok(StrOrBytes(v.into_boxed_slice()))
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-                let bytes_hint = seq.size_hint()
-                    .map(|x| x.min(2048))
-                    .unwrap_or(2048);
+                let bytes_hint = seq.size_hint().map(|x| x.min(2048)).unwrap_or(2048);
 
                 let mut vec = Vec::with_capacity(bytes_hint);
 
@@ -104,20 +115,22 @@ impl Debug for StrOrBytes {
             Ok(s) => {
                 f.write_char('b')?;
                 <str as Debug>::fmt(s, f)
-            },
+            }
             Err(_) => <[u8] as Debug>::fmt(&self.0, f),
         }
     }
 }
 impl Serialize for StrOrBytes {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         match simdutf8::basic::from_utf8(&self.0) {
             Ok(str) => serializer.serialize_str(str),
-            Err(_) => serializer.serialize_bytes(&self.0)
+            Err(_) => serializer.serialize_bytes(&self.0),
         }
     }
 }
-
 
 impl Deref for StrOrBytes {
     type Target = [u8];
@@ -133,20 +146,23 @@ pub enum ProcessStep {
     Plaintext,
 
     /// strips the current data of some leading and trailing bytes
-    Strip { prefix: Option<StrOrBytes>, suffix: Option<StrOrBytes> },
+    Strip {
+        prefix: Option<StrOrBytes>,
+        suffix: Option<StrOrBytes>,
+    },
 
     /// parses the current data as a json, and extracts the value from
     Json { key: Box<str> },
 
     /// parses the current data based on a wasm parser
-    WasmTransform { module: Box<Path> }
+    WasmTransform { module: Box<Path> },
 }
 
 fn get_json_key(json: &[u8], key: &str) -> serde_json::Result<serde_json::Value> {
     let mut deserializer = JsonDeserializer::new(SliceRead::new(json));
 
     struct JsonVisitor<'a> {
-        key: &'a str
+        key: &'a str,
     }
 
     impl<'de, 'a> Visitor<'de> for JsonVisitor<'a> {
@@ -172,12 +188,10 @@ fn get_json_key(json: &[u8], key: &str) -> serde_json::Result<serde_json::Value>
     deserializer.deserialize_map(JsonVisitor { key })
 }
 
-
 #[derive(Clone, Debug, PartialOrd, PartialEq, Ord, Eq, Serialize, Deserialize)]
 struct Process {
-    steps: Arc<[ProcessStep]>
+    steps: Arc<[ProcessStep]>,
 }
-
 
 impl Process {
     async fn run(&self, mut bytes: Bytes, cfg: &Config) -> Result<Ipv4Addr, GetIpError> {
@@ -221,87 +235,112 @@ async fn into_process(mut steps: Vec<ProcessStep>) -> Result<Process, io::Error>
         steps.pop();
     }
 
-    steps.dedup_by(|x, y| {
-        matches!((x, y), (ProcessStep::Plaintext, ProcessStep::Plaintext))
-    });
+    steps.dedup_by(|x, y| matches!((x, y), (ProcessStep::Plaintext, ProcessStep::Plaintext)));
 
-    let steps = futures::stream::iter(steps).map(|step| async move {
-        use ProcessStep as S;
-        match step {
-            step @ (S::Json{..}|S::Plaintext) => Some(Ok(step)),
-            S::Strip { prefix, suffix } => {
-                match (prefix, suffix) {
+    let steps = futures::stream::iter(steps)
+        .map(|step| async move {
+            use ProcessStep as S;
+            match step {
+                step @ (S::Json { .. } | S::Plaintext) => Some(Ok(step)),
+                S::Strip { prefix, suffix } => match (prefix, suffix) {
                     (None, None) => None,
-                    (prefix, suffix) => Some(Ok(S::Strip { prefix, suffix }))
+                    (prefix, suffix) => Some(Ok(S::Strip { prefix, suffix })),
+                },
+                S::WasmTransform { module } => {
+                    let step = tokio::fs::canonicalize(module)
+                        .await
+                        .and_then(|x| match x.to_str() {
+                            Some(_) => Ok(x),
+                            None => Err(io::Error::new(
+                                ErrorKind::InvalidData,
+                                "path contains invalid utf-8",
+                            )),
+                        })
+                        .map(PathBuf::into_boxed_path)
+                        .map(|module| S::WasmTransform { module });
+                    Some(step)
                 }
             }
-            S::WasmTransform { module } => {
-                let step = tokio::fs::canonicalize(module).await
-                    .and_then(|x| match x.to_str() {
-                        Some(_) => Ok(x),
-                        None => Err(io::Error::new(
-                            ErrorKind::InvalidData,
-                            "path contains invalid utf-8"
-                        ))
-                    })
-                    .map(PathBuf::into_boxed_path)
-                    .map(|module| S::WasmTransform { module });
-                Some(step)
-            }
-        }
-    }).buffered(num_cpus().get()).filter_map(|x| async move { x })
-        .try_collect::<Vec<_>>().await;
+        })
+        .buffered(num_cpus().get())
+        .filter_map(|x| async move { x })
+        .try_collect::<Vec<_>>()
+        .await;
 
-    steps.map(|steps| Process { steps: steps.into() })
+    steps.map(|steps| Process {
+        steps: steps.into(),
+    })
 }
 
 #[derive(PartialOrd, PartialEq, Ord, Eq)]
 pub struct Sources {
     sources: BTreeMap<Url, Process>,
     pub(crate) driver_path: Option<Box<Path>>,
-    pub(crate) concurrent_resolve: Option<NonZeroU8>
+    pub(crate) concurrent_resolve: Option<NonZeroU8>,
 }
 
 impl Sources {
-    pub async fn from_try_iter<I, Url, Steps, E>(iter: I, driver_path: Option<Box<Path>>, concurrent_resolve: Option<NonZeroU8>) -> Result<Self>
-        where I: IntoIterator<Item=Result<(Url, Steps), E>>,
-              E: Into<anyhow::Error>,
-              Url: AsRef<str>,
-              Steps: IntoIterator<Item=ProcessStep>,
+    pub async fn from_try_iter<I, Url, Steps, E>(
+        iter: I,
+        driver_path: Option<Box<Path>>,
+        concurrent_resolve: Option<NonZeroU8>,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = Result<(Url, Steps), E>>,
+        E: Into<anyhow::Error>,
+        Url: AsRef<str>,
+        Steps: IntoIterator<Item = ProcessStep>,
     {
         futures::stream::iter(iter)
             .map(|res| async move {
                 let (url, steps) = res.map_err(Into::into)?;
                 Ok((
                     url::Url::parse(url.as_ref())?,
-                    into_process(steps.into_iter().collect()).await?
+                    into_process(steps.into_iter().collect()).await?,
                 ))
             })
             .buffer_unordered(num_cpus().get())
-            .try_collect::<BTreeMap<url::Url, Process>>().await
-            .map(|sources| Sources { sources, driver_path, concurrent_resolve })
+            .try_collect::<BTreeMap<url::Url, Process>>()
+            .await
+            .map(|sources| Sources {
+                sources,
+                driver_path,
+                concurrent_resolve,
+            })
     }
 
-    pub async fn from_iter<I, Url, Steps>(iter: I, driver_path: Option<Box<Path>>, concurrent_resolve: Option<NonZeroU8>) -> Result<Self>
-        where I: IntoIterator<Item=(Url, Steps)>,
-              Url: AsRef<str>,
-              Steps: IntoIterator<Item=ProcessStep>
-    { Self::from_try_iter(iter.into_iter().map(Ok::<_, Infallible>), driver_path, concurrent_resolve).await }
+    pub async fn from_iter<I, Url, Steps>(
+        iter: I,
+        driver_path: Option<Box<Path>>,
+        concurrent_resolve: Option<NonZeroU8>,
+    ) -> Result<Self>
+    where
+        I: IntoIterator<Item = (Url, Steps)>,
+        Url: AsRef<str>,
+        Steps: IntoIterator<Item = ProcessStep>,
+    {
+        Self::from_try_iter(
+            iter.into_iter().map(Ok::<_, Infallible>),
+            driver_path,
+            concurrent_resolve,
+        )
+        .await
+    }
 
     pub async fn deserialize_async(text: &str) -> Result<Self> {
         #[derive(Deserialize)]
         struct ProcessIntermediate {
-            steps: Vec<ProcessStep>
+            steps: Vec<ProcessStep>,
         }
-        
+
         let mut value = toml::from_str::<Map<String, Value>>(text)?;
-        
+
         macro_rules! get_field {
             ($thing: ident: [$($lit:literal),*] => |$key: ident, $val: ident| $fun: expr) => {
                 let mut $thing = None;
                 for $key in [$($lit),*] {
                     if let Some($val) = value.remove($key) {
-                        if $thing.is_some() { 
+                        if $thing.is_some() {
                             anyhow::bail!("fields {:?} collide, you can't have multiple set at the same time", [$($lit),*])
                         }
                         $thing = Some($fun);
@@ -309,27 +348,33 @@ impl Sources {
                 }
             };
         }
-        
+
         get_field!(
-            concurrent_resolve: ["concurrent-resolve", "concurrent_resolve"] => |key, val| 
+            concurrent_resolve: ["concurrent-resolve", "concurrent_resolve"] => |key, val|
                 NonZeroU8::new(val.try_into::<u8>()?).ok_or_else(|| anyhow::anyhow!("{key} can't be zero"))?
         );
 
         get_field!(
             driver_path: ["driver-path", "driver_path"] => |key, val| val.try_into::<Box<Path>>()?
         );
-        
-        Self::from_try_iter(value.into_iter().map(|(url, v)| {
-            v.try_into::<ProcessIntermediate>().map(|v| (url, v.steps))
-        }), driver_path, concurrent_resolve).await
+
+        Self::from_try_iter(
+            value
+                .into_iter()
+                .map(|(url, v)| v.try_into::<ProcessIntermediate>().map(|v| (url, v.steps))),
+            driver_path,
+            concurrent_resolve,
+        )
+        .await
     }
-    
+
     pub async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         Self::deserialize_async(&tokio::fs::read_to_string(path).await?).await
     }
-    
-    pub fn sources(&self) -> impl Iterator<Item=IpSource> + '_ {
-        self.sources.iter()
+
+    pub fn sources(&self) -> impl Iterator<Item = IpSource> + '_ {
+        self.sources
+            .iter()
             .map(|(url, process)| (url.clone(), process.clone()))
             .map(|(url, process)| IpSource { url, process })
     }
@@ -339,43 +384,60 @@ impl Debug for Sources {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_map()
             .entries(self.sources.iter().map(|(url, p)| (url.as_str(), p)))
-            .entries(self.driver_path.as_deref().map(|path| ("driver-path", path)))
-            .entries(self.concurrent_resolve.map(|num| ("concurrent-resolve", num)))
+            .entries(
+                self.driver_path
+                    .as_deref()
+                    .map(|path| ("driver-path", path)),
+            )
+            .entries(
+                self.concurrent_resolve
+                    .map(|num| ("concurrent-resolve", num)),
+            )
             .finish()
     }
 }
 
 impl Default for Sources {
     fn default() -> Self {
-        let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(include!("../../../default/gen/sources.array"), None, None))
-            .poll(&mut Context::from_waker(noop_waker_ref()))
-            else { panic!("bad build artifact") };
+        let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(
+            include!("../../../default/gen/sources.array"),
+            None,
+            None
+        ))
+        .poll(&mut Context::from_waker(noop_waker_ref())) else {
+            panic!("bad build artifact")
+        };
 
         sources
     }
 }
 
 impl Serialize for Sources {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
         let mut map_serialize = serializer.serialize_map(Some(self.sources.len()))?;
 
         for (url, proc) in self.sources.iter() {
             map_serialize.serialize_entry(url.as_str(), proc)?
         }
-        
+
         map_serialize.end()
     }
 }
 
-
 pub struct IpSource {
     url: Url,
-    process: Process
+    process: Process,
 }
 
-
 impl IpSource {
-    pub async fn resolve_ip(self, client: &RetryingClient, cfg: &Config) -> Result<Ipv4Addr, GetIpError> {
+    pub async fn resolve_ip(
+        self,
+        client: &RetryingClient,
+        cfg: &Config,
+    ) -> Result<Ipv4Addr, GetIpError> {
         let bytes = client.get(self.url).send().await?.bytes().await?;
         self.process.run(bytes, cfg).await
     }

@@ -15,19 +15,24 @@ macro_rules! dbg_println {
     };
 }
 
-
 fn spawn_thread(fun: impl FnOnce() + Send + 'static) {
     let handle = Handle::try_current();
     match handle {
-        Ok(handle) => { handle.spawn_blocking(fun); },
-        Err(_) => { thread::spawn(fun); }
+        Ok(handle) => {
+            handle.spawn_blocking(fun);
+        }
+        Err(_) => {
+            thread::spawn(fun);
+        }
     }
 }
 
 #[cfg(windows)]
 mod sys {
-    use windows::core::{PCWSTR, w as wide};
-    use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONWARNING, MB_OK, MessageBoxW};
+    use windows::core::{w as wide, PCWSTR};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONERROR, MB_ICONWARNING, MB_OK,
+    };
 
     fn encode_wide(str: &str) -> Vec<u16> {
         str.encode_utf16().chain([0u16]).collect::<Vec<u16>>()
@@ -41,7 +46,7 @@ mod sys {
                 None,
                 err,
                 wide!("CloudFlare DDNS Error"),
-                MB_OK | MB_ICONERROR
+                MB_OK | MB_ICONERROR,
             );
         }
     }
@@ -54,7 +59,7 @@ mod sys {
                 None,
                 warning,
                 wide!("CloudFlare DDNS Warning"),
-                MB_OK | MB_ICONWARNING
+                MB_OK | MB_ICONWARNING,
             );
         }
     }
@@ -75,7 +80,10 @@ mod sys {
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
     use core_foundation_sys::base::CFOptionFlags;
-    use core_foundation_sys::user_notification::{CFUserNotificationDisplayAlert, kCFUserNotificationCautionAlertLevel, kCFUserNotificationStopAlertLevel};
+    use core_foundation_sys::user_notification::{
+        kCFUserNotificationCautionAlertLevel, kCFUserNotificationStopAlertLevel,
+        CFUserNotificationDisplayAlert,
+    };
 
     fn present_alert(title: &str, message: &str, flags: CFOptionFlags) {
         let header = CFString::new(title);
@@ -84,10 +92,15 @@ mod sys {
             CFUserNotificationDisplayAlert(
                 0.0,
                 flags,
-                std::ptr::null(), std::ptr::null(), std::ptr::null(),
-                header.as_concrete_TypeRef(), message.as_concrete_TypeRef(),
-                std::ptr::null(), std::ptr::null(), std::ptr::null(),
-                std::ptr::null_mut()
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                header.as_concrete_TypeRef(),
+                message.as_concrete_TypeRef(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
             )
         };
     }
@@ -95,16 +108,23 @@ mod sys {
     #[cold]
     #[inline(never)]
     pub fn warn(warning: &str) {
-        present_alert("CloudFlare DDNS Warning", warning, kCFUserNotificationCautionAlertLevel);
+        present_alert(
+            "CloudFlare DDNS Warning",
+            warning,
+            kCFUserNotificationCautionAlertLevel,
+        );
     }
 
     #[cold]
     #[inline(never)]
     pub fn err(err: &str) {
-        present_alert("CloudFlare DDNS Error", err, kCFUserNotificationStopAlertLevel);
+        present_alert(
+            "CloudFlare DDNS Error",
+            err,
+            kCFUserNotificationStopAlertLevel,
+        );
     }
 }
-
 
 #[cold]
 #[inline(never)]
@@ -129,7 +149,7 @@ pub async fn spawn_message_box(semaphore: Arc<Semaphore>, err: impl FnOnce() + S
     }
 }
 
-fn hook(info: &PanicInfo)  {
+fn hook(info: &PanicInfo) {
     macro_rules! try_cast {
         ([$payload:expr] $type: ty $(, $rest: ty)* |> $default: expr) => {
             match $payload.downcast_ref::<$type>() {
@@ -139,14 +159,14 @@ fn hook(info: &PanicInfo)  {
         };
         ([$payload:expr] |> $default: expr) => { $default };
     }
-    
+
     let msg = try_cast!([info.payload()] String,&str,Box<str>,Rc<str>,Arc<str>,Cow<str> |> "dyn Any + Send + 'static");
 
     dbg_println!("We panicked at: {msg}");
-    
+
     match Handle::try_current().as_ref().map(Handle::runtime_flavor) {
         Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(|| err(msg)),
-        _ => err(msg)
+        _ => err(msg),
     }
 }
 

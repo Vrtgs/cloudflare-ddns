@@ -1,6 +1,5 @@
 use crate::updaters::UpdatersManager;
 
-
 macro_rules! wait_for_any {
     ($($fut: expr),* $(,)?) => {
         tokio::select! {
@@ -34,7 +33,7 @@ mod sys {
 mod sys {
     use tokio::signal::unix as signal;
 
-    pub(super) async fn recv_exit()  {
+    pub(super) async fn recv_exit() {
         let mut terminate = signal::signal(signal::SignalKind::terminate()).unwrap();
         let mut quit = signal::signal(signal::SignalKind::quit()).unwrap();
         let mut hangup = signal::signal(signal::SignalKind::hangup()).unwrap();
@@ -47,7 +46,6 @@ mod sys {
         )
     }
 }
-
 
 pub fn subscribe(updaters_manager: &mut UpdatersManager) {
     let (updater, jh_entry) = updaters_manager.add_updater("shutdown-listener");

@@ -1,16 +1,15 @@
+use crate::MessageBoxes;
+use ahash::{HashMap, HashMapExt};
 use std::collections::hash_map::{Entry, VacantEntry};
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Weak};
-use ahash::{HashMap, HashMapExt};
-use tokio::sync::mpsc::{UnboundedSender, UnboundedReceiver};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use crate::MessageBoxes;
-
 
 pub enum UpdaterEvent {
     Update,
-    ServiceEvent(UpdaterExit)
+    ServiceEvent(UpdaterExit),
 }
 
 pub enum UpdaterExitStatus {
@@ -23,7 +22,7 @@ pub enum UpdaterExitStatus {
 
 pub struct UpdaterExit {
     pub name: &'static str,
-    pub status: UpdaterExitStatus
+    pub status: UpdaterExitStatus,
 }
 
 impl Display for UpdaterExitStatus {
@@ -33,7 +32,9 @@ impl Display for UpdaterExitStatus {
             UpdaterExitStatus::Panic => write!(f, "died unexpectedly"),
             UpdaterExitStatus::Error(e) => write!(f, "exited with the error: {e}"),
             UpdaterExitStatus::TriggerRestart => write!(f, "triggered a restart"),
-            UpdaterExitStatus::TriggerExit(code) => write!(f, "triggered an exit with code: {code}"),
+            UpdaterExitStatus::TriggerExit(code) => {
+                write!(f, "triggered an exit with code: {code}")
+            }
         }
     }
 }
@@ -50,25 +51,24 @@ pub struct UpdatersManager {
     notifier: Arc<Notify>,
     active_services: HashMap<&'static str, JoinHandle<()>>,
     message_boxes: MessageBoxes,
-    shutdown: tokio::sync::watch::Sender<()>
+    shutdown: tokio::sync::watch::Sender<()>,
 }
 
 impl UpdatersManager {
     #[inline(always)]
     pub fn new(message_boxes: MessageBoxes) -> Self {
-        let (snd, rcv) =
-            tokio::sync::mpsc::unbounded_channel();
+        let (snd, rcv) = tokio::sync::mpsc::unbounded_channel();
         let (shutdown, _) = tokio::sync::watch::channel(());
-        UpdatersManager { 
+        UpdatersManager {
             rcv,
             snd,
             notifier: Arc::new(Notify::new()),
             active_services: HashMap::new(),
             message_boxes,
-            shutdown
+            shutdown,
         }
     }
-    
+
     /// watches for service changes
     pub async fn watch(&mut self) -> UpdaterEvent {
         tokio::select! {
@@ -90,8 +90,9 @@ impl UpdatersManager {
     #[inline(always)]
     #[must_use = "updater will instantly exit and trigger an exit event on drop, and you must add your JoinHandle"]
     pub fn add_updater(&mut self, name: &'static str) -> (Updater, JhEntry<'_>) {
-        let Entry::Vacant(entry) = self.active_services.entry(name)
-            else { panic!("updater must have a unique name") };
+        let Entry::Vacant(entry) = self.active_services.entry(name) else {
+            panic!("updater must have a unique name")
+        };
 
         let snd = self.snd.clone();
 
@@ -101,18 +102,21 @@ impl UpdatersManager {
             name,
         };
 
-        (Updater {
-            name,
-            notifier: Arc::downgrade(&self.notifier),
-            snd: Some(snd),
-            shutdown: self.shutdown.subscribe()
-        }, entry)
+        (
+            Updater {
+                name,
+                notifier: Arc::downgrade(&self.notifier),
+                snd: Some(snd),
+                shutdown: self.shutdown.subscribe(),
+            },
+            entry,
+        )
     }
-    
+
     pub fn message_boxes(&self) -> &MessageBoxes {
         &self.message_boxes
     }
-    
+
     pub async fn shutdown(self) {
         async fn forward_panic(join_handle: JoinHandle<()>) {
             if let Err(e) = join_handle.await {
@@ -123,9 +127,8 @@ impl UpdatersManager {
         }
 
         let _ = self.shutdown.send(());
-        let iter = self.active_services.into_values()
-            .map(forward_panic);
-        
+        let iter = self.active_services.into_values().map(forward_panic);
+
         futures::future::join_all(iter).await;
     }
 }
@@ -133,7 +136,7 @@ impl UpdatersManager {
 pub struct JhEntry<'a> {
     entry: Option<VacantEntry<'a, &'static str, JoinHandle<()>>>,
     send_fail: &'a mut UnboundedSender<UpdaterExit>,
-    name: &'static str
+    name: &'static str,
 }
 
 impl<'a> JhEntry<'a> {
@@ -154,12 +157,11 @@ impl<'a> Drop for JhEntry<'a> {
     }
 }
 
-
 pub struct Updater {
     name: &'static str,
     notifier: Weak<Notify>,
     snd: Option<UnboundedSender<UpdaterExit>>,
-    shutdown: tokio::sync::watch::Receiver<()>
+    shutdown: tokio::sync::watch::Receiver<()>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -168,31 +170,34 @@ pub struct UpdateError;
 
 impl Updater {
     #[inline(always)]
-    pub fn update(&self) -> Result<(), UpdateError> { 
+    pub fn update(&self) -> Result<(), UpdateError> {
         Weak::upgrade(&self.notifier)
             .map(|notifier| notifier.notify_waiters())
             .ok_or(UpdateError)
     }
-    
+
     pub async fn wait_shutdown(&self) {
         let _ = self.shutdown.clone().changed().await;
     }
-    
+
     pub fn exit(mut self, err: Result<(), impl Into<anyhow::Error>>) {
         let status = match err {
             Ok(()) => UpdaterExitStatus::Success,
-            Err(err) => UpdaterExitStatus::Error(err.into())
+            Err(err) => UpdaterExitStatus::Error(err.into()),
         };
-        
+
         let snd = self.snd.take().unwrap();
-        let _ = snd.send(UpdaterExit { name: self.name, status });
+        let _ = snd.send(UpdaterExit {
+            name: self.name,
+            status,
+        });
     }
-    
+
     pub fn trigger_exit(mut self, code: u8) {
         let snd = self.snd.take().unwrap();
         let _ = snd.send(UpdaterExit {
             name: self.name,
-            status: UpdaterExitStatus::TriggerExit(code)
+            status: UpdaterExitStatus::TriggerExit(code),
         });
     }
 
@@ -200,7 +205,7 @@ impl Updater {
         let snd = self.snd.take().unwrap();
         let _ = snd.send(UpdaterExit {
             name: self.name,
-            status: UpdaterExitStatus::TriggerRestart
+            status: UpdaterExitStatus::TriggerRestart,
         });
     }
 }
@@ -210,10 +215,13 @@ impl Drop for Updater {
         if let Some(snd) = self.snd.take() {
             let status = match std::thread::panicking() {
                 false => UpdaterExitStatus::Success,
-                true => UpdaterExitStatus::Panic
+                true => UpdaterExitStatus::Panic,
             };
-            
-            let _ = snd.send(UpdaterExit { name: self.name, status });
+
+            let _ = snd.send(UpdaterExit {
+                name: self.name,
+                status,
+            });
         }
     }
 }
