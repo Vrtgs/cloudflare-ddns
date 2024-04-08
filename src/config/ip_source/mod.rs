@@ -391,13 +391,13 @@ impl Debug for Sources {
                 self.driver_path
                     .deref()
                     .ne(Path::new("./ddns-wasm-runtime.dll"))
-                    .then(|| ("driver-path", &*self.driver_path)),
+                    .then_some(("driver-path", &*self.driver_path)),
             )
             .entries(
                 self.concurrent_resolve
                     .get()
                     .ne(&16)
-                    .then(|| ("concurrent-resolve", self.concurrent_resolve)),
+                    .then_some(("concurrent-resolve", self.concurrent_resolve)),
             )
             .finish()
     }

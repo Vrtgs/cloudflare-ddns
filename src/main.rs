@@ -206,7 +206,9 @@ async fn real_main() -> Action {
     err::exit::subscribe(&mut updaters_manager);
     network_listener::subscribe(&mut updaters_manager);
     console_listener::subscribe(&mut updaters_manager);
-    let cfg_store = config::listener::subscribe(&mut updaters_manager).await.expect("unable to create config defaults");
+    let cfg_store = config::listener::subscribe(&mut updaters_manager)
+        .await
+        .expect("unable to create config defaults");
 
     // 1 hour
     // this will be controlled by config
