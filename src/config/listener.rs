@@ -1,7 +1,7 @@
 use crate::config::ip_source::Sources;
 use crate::config::{ApiFields, CfgInner, Config};
 use crate::updaters::{Updater, UpdatersManager};
-use crate::MessageBoxes;
+use crate::{MessageBoxes, util};
 use anyhow::anyhow;
 use anyhow::Result;
 use arc_swap::ArcSwap;
@@ -162,7 +162,7 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> io::Result<Con
     let msg_bx_handle = updaters_manager.message_boxes().clone();
     let (updater, jh_entry) = updaters_manager.add_updater("config-listener");
 
-    if !tokio::fs::try_exists("./config").await? {
+    if !util::try_exists("./config").await? {
         tokio::fs::create_dir_all("./config").await?;
     }
     if !tokio::fs::metadata("./config").await?.is_dir() {
@@ -172,7 +172,7 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> io::Result<Con
     macro_rules! exists_or_include {
         ($($path: expr, $default: expr);*) => {
             tokio::try_join!($(async {
-                if !tokio::fs::try_exists($path).await? {
+                if !util::try_exists($path).await? {
                     tokio::fs::write($path, include_str!($default)).await?;
                 }
                 Ok::<_, io::Error>(())

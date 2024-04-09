@@ -28,7 +28,7 @@ trace = ["tokio/tracing", "dep:console-subscriber"]
 [dependencies]
 tokio                 = { version = "1.37.0", features = ["full"] }
 futures               = { version = "0.3.30"}
-serde                 = { version = "1.0.153", features = ["derive", "rc"] }
+serde                 = { version = "1.0.197", features = ["derive", "rc"] }
 simd-json             = { version = "0.13.9", features = ["ahash"] }
 anyhow                = { version = "1.0.81", features = ["backtrace"] }
 dashmap               = { version = "5.5.3", features = ["inline"] }
@@ -56,7 +56,7 @@ features = ["tokio"]
 git = "https://github.com/kotauskas/interprocess.git"
 
 [dependencies.reqwest]
-version = "0.12.2"
+version = "0.12.3"
 default-features = false
 features = [
     "charset",

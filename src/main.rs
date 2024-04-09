@@ -224,7 +224,7 @@ async fn real_main() -> Action {
 
                 dbg_println!("updating");
                 match ctx.run_ddns(cfg_store.load_config()).await {
-                    Err(panic) => ctx.message_boxes.error(panic.to_string()).await,
+                    Err(err) => ctx.message_boxes.error(err.to_string()).await,
                     Ok(()) => dbg_println!("successfully updated")
                 }
             },

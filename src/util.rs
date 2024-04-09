@@ -1,5 +1,7 @@
 use std::fmt::{Display, Formatter, Write};
+use std::io;
 use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
@@ -16,6 +18,16 @@ pub fn num_cpus() -> NonZeroUsize {
 
     *NUM_CPUS.get_or_init(num_cpus_uncached)
 }
+
+pub async fn try_exists(path: impl AsRef<Path>) -> io::Result<bool> {
+    async fn inner(path: PathBuf) -> io::Result<bool> {
+        tokio::task::spawn_blocking(move || path.try_exists()).await
+            .map_err(|e| io::Error::other(format!("background task failed: {e}")))?
+    }
+
+    inner(path.as_ref().to_owned()).await
+}
+
 
 pub fn new_skip_interval(period: Duration) -> Interval {
     new_skip_interval_at(Instant::now(), period)
