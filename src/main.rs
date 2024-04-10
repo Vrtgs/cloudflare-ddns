@@ -9,7 +9,7 @@ use crate::network_listener::has_internet;
 use crate::retrying_client::RetryingClient;
 use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
 use crate::util::{new_skip_interval, num_cpus, EscapeExt};
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
 use serde::Deserialize;
 use std::borrow::Cow;
@@ -44,7 +44,7 @@ struct Record {
 }
 
 impl DdnsContext {
-    async fn get_ip(&self, cfg: &Config) -> anyhow::Result<Ipv4Addr> {
+    async fn get_ip(&self, cfg: &Config) -> Result<Ipv4Addr> {
         let last_err = Cell::new(None);
 
         let iter = cfg.ip_sources().map(|x| x.resolve_ip(&self.client, cfg));
@@ -68,7 +68,7 @@ impl DdnsContext {
             .ok_or_else(|| last_err.take().unwrap_or(GetIpError::NoIpSources).into())
     }
 
-    async fn get_record(&self, cfg: &Config) -> anyhow::Result<Record> {
+    async fn get_record(&self, cfg: &Config) -> Result<Record> {
         let url = format!(
             "https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records?type=A&name={record}",
             zone_id = cfg.zone().id(),
@@ -76,7 +76,7 @@ impl DdnsContext {
         );
 
         #[derive(Debug, Deserialize)]
-        struct FullRecord {
+        struct FullATypeRecord {
             id: Box<str>,
             name: Box<str>,
             #[serde(rename = "content")]
@@ -85,7 +85,7 @@ impl DdnsContext {
 
         #[derive(Debug, Deserialize)]
         pub struct GetResponse {
-            result: Vec<FullRecord>,
+            result: Vec<FullATypeRecord>,
         }
 
         let records = cfg
@@ -96,7 +96,7 @@ impl DdnsContext {
             .await?
             .result;
 
-        let [FullRecord { id, ip, name }] = <[FullRecord; 1]>::try_from(records)
+        let [FullATypeRecord { id, ip, name }] = <[FullATypeRecord; 1]>::try_from(records)
             .map_err(|vec| anyhow!("expected 1 record got {} records: {vec:?}", vec.len()))?;
 
         anyhow::ensure!(
@@ -108,7 +108,7 @@ impl DdnsContext {
         Ok(Record { id, ip })
     }
 
-    async fn update_record(&self, id: &str, ip: Ipv4Addr, cfg: &Config) -> anyhow::Result<()> {
+    async fn update_record(&self, id: &str, ip: Ipv4Addr, cfg: &Config) -> Result<()> {
         let request_json = format! {
             r###"{{"type":"A","name":"{record}","content":"{ip}","proxied":{proxied}}}"###,
             record = cfg.zone().record().escape_json(),
@@ -149,7 +149,7 @@ impl DdnsContext {
         Ok(())
     }
 
-    pub async fn run_ddns(&self, cfg: Config) -> anyhow::Result<()> {
+    pub async fn run_ddns(&self, cfg: Config) -> Result<()> {
         let (record, current_ip) = try_join!(self.get_record(&cfg), self.get_ip(&cfg))?;
 
         if record.ip == current_ip {
@@ -192,7 +192,7 @@ enum Action {
     Exit(u8),
 }
 
-async fn real_main() -> Action {
+async fn real_main() -> Result<Action> {
     let ctx = DdnsContext {
         client: RetryingClient::new(),
         message_boxes: MessageBoxes {
@@ -203,12 +203,11 @@ async fn real_main() -> Action {
 
     let mut updaters_manager = UpdatersManager::new(ctx.message_boxes.clone());
 
-    err::exit::subscribe(&mut updaters_manager);
-    network_listener::subscribe(&mut updaters_manager);
-    console_listener::subscribe(&mut updaters_manager);
+    err::exit::subscribe(&mut updaters_manager)?;
+    network_listener::subscribe(&mut updaters_manager)?;
+    console_listener::subscribe(&mut updaters_manager)?;
     let cfg_store = config::listener::subscribe(&mut updaters_manager)
-        .await
-        .expect("unable to create config defaults");
+        .await?;
 
     // 1 hour
     // this will be controlled by config
@@ -238,9 +237,9 @@ async fn real_main() -> Action {
                         }
                         UpdaterExitStatus::TriggerExit(code) => {
                             updaters_manager.shutdown().await;
-                            return Action::Exit(code);
+                            return Ok(Action::Exit(code));
                         },
-                        UpdaterExitStatus::TriggerRestart => return Action::Restart,
+                        UpdaterExitStatus::TriggerRestart => return Ok(Action::Restart),
                     }
                 }
             }
@@ -275,13 +274,25 @@ fn main() -> ExitCode {
         let exit = std::panic::catch_unwind(|| runtime.block_on(real_main()));
 
         match exit {
-            Ok(Action::Exit(exit)) => {
+            // Non-Recoverable
+            Ok(Ok(Action::Exit(exit))) => {
                 dbg_println!("Shutting down the runtime...");
                 drop(runtime);
                 dbg_println!("Exiting...");
                 return ExitCode::from(exit);
             }
-            Ok(Action::Restart) => dbg_println!("Restarting..."),
+            Ok(Err(e)) => {
+                dbg_println!("Fatal Error");
+                dbg_println!("Aborting...");
+                runtime.shutdown_background();
+                
+                let msg = e.to_string();
+                err::err(&msg);
+                panic!("{msg}")
+            },
+            
+            // Recoverable
+            Ok(Ok(Action::Restart)) => dbg_println!("Restarting..."),
             Err(_) => {
                 dbg_println!("Panicked!!");
                 dbg_println!("Retrying in 15s...");

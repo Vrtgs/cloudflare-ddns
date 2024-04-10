@@ -21,13 +21,13 @@ pub fn num_cpus() -> NonZeroUsize {
 
 pub async fn try_exists(path: impl AsRef<Path>) -> io::Result<bool> {
     async fn inner(path: PathBuf) -> io::Result<bool> {
-        tokio::task::spawn_blocking(move || path.try_exists()).await
+        tokio::task::spawn_blocking(move || path.try_exists())
+            .await
             .map_err(|e| io::Error::other(format!("background task failed: {e}")))?
     }
 
     inner(path.as_ref().to_owned()).await
 }
-
 
 pub fn new_skip_interval(period: Duration) -> Interval {
     new_skip_interval_at(Instant::now(), period)

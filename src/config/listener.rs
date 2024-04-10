@@ -1,8 +1,8 @@
 use crate::config::ip_source::Sources;
 use crate::config::{ApiFields, CfgInner, Config};
 use crate::updaters::{Updater, UpdatersManager};
-use crate::{MessageBoxes, util};
-use anyhow::anyhow;
+use crate::{util, MessageBoxes};
+use anyhow::{anyhow, Context};
 use anyhow::Result;
 use arc_swap::ArcSwap;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -158,7 +158,7 @@ async fn listen(
     anyhow::Ok(())
 }
 
-pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> io::Result<ConfigStorage> {
+pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<ConfigStorage> {
     let msg_bx_handle = updaters_manager.message_boxes().clone();
     let (updater, jh_entry) = updaters_manager.add_updater("config-listener");
 
@@ -166,11 +166,11 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> io::Result<Con
         tokio::fs::create_dir_all("./config").await?;
     }
     if !tokio::fs::metadata("./config").await?.is_dir() {
-        return Err(io::Error::other("./config is not a directory"));
+        anyhow::bail!("./config is not a directory")
     }
 
     macro_rules! exists_or_include {
-        ($($path: expr, $default: expr);*) => {
+        ($($path: expr, $default: expr $(;)+)*) => {
             tokio::try_join!($(async {
                 if !util::try_exists($path).await? {
                     tokio::fs::write($path, include_str!($default)).await?;
@@ -182,7 +182,7 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> io::Result<Con
 
     exists_or_include!(
         "./config/sources.toml", "../../default/gen/sources.toml";
-        "./config/config.toml", "../../default/config.toml"
+        "./config/config.toml", "../../default/config.toml";
     )?;
 
     let ip_sources = match Sources::from_file("./config/sources.toml").await {
@@ -195,10 +195,8 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> io::Result<Con
         }
     };
 
-    let api_fields = match ApiFields::from_file("./config/config.toml").await {
-        Ok(x) => x,
-        Err(err) => panic!("{err}\n\n\n\n...Invalid API Config, Exiting..."),
-    };
+    let api_fields = ApiFields::from_file("./config/config.toml").await
+        .with_context(|| "Invalid API Fields Config")?;
 
     let cfg = Arc::new(ArcSwap::new(Arc::new(CfgInner::new(
         api_fields, ip_sources,

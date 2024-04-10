@@ -47,7 +47,7 @@ async fn listen(updater: &Updater) -> io::Result<Status> {
 }
 
 #[cfg(debug_assertions)]
-pub fn subscribe(updaters_manager: &mut UpdatersManager) {
+pub fn subscribe(updaters_manager: &mut UpdatersManager)  -> Result<(), Infallible> {
     let (updater, jh_entry) = updaters_manager.add_updater("console-listener");
     jh_entry.insert(tokio::spawn(async move {
         let res = tokio::select! {
@@ -62,8 +62,10 @@ pub fn subscribe(updaters_manager: &mut UpdatersManager) {
             Err(e) => updater.exit(Err(e)),
         }
     }));
+    
+    Ok(())
 }
 
 #[cfg(not(debug_assertions))]
 #[inline]
-pub fn subscribe(_: &mut UpdatersManager) {}
+pub fn subscribe(_: &mut UpdatersManager) -> Result<(), Infallible> { Ok(()) }

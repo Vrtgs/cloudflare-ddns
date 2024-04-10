@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use crate::updaters::UpdatersManager;
 
 macro_rules! wait_for_any {
@@ -47,12 +48,14 @@ mod sys {
     }
 }
 
-pub fn subscribe(updaters_manager: &mut UpdatersManager) {
+pub fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<(), Infallible> {
     let (updater, jh_entry) = updaters_manager.add_updater("shutdown-listener");
     jh_entry.insert(tokio::spawn(async {
         tokio::select! {
             _ = sys::recv_exit() => updater.trigger_exit(0),
             _ = updater.wait_shutdown() => {}
         }
-    }))
+    }));
+    
+    Ok(())
 }
