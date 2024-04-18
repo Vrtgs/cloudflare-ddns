@@ -1,5 +1,7 @@
 use crate::MessageBoxes;
 use ahash::{HashMap, HashMapExt};
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use std::collections::hash_map::{Entry, VacantEntry};
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Weak};
@@ -127,9 +129,12 @@ impl UpdatersManager {
         }
 
         let _ = self.shutdown.send(());
-        let iter = self.active_services.into_values().map(forward_panic);
-
-        futures::future::join_all(iter).await;
+        self.active_services
+            .into_values()
+            .map(forward_panic)
+            .collect::<FuturesUnordered<_>>()
+            .collect::<()>()
+            .await;
     }
 }
 

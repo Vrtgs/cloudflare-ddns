@@ -1,5 +1,5 @@
-use std::convert::Infallible;
 use crate::updaters::UpdatersManager;
+use std::convert::Infallible;
 
 macro_rules! wait_for_any {
     ($($fut: expr),* $(,)?) => {
@@ -56,6 +56,6 @@ pub fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<(), Infallibl
             _ = updater.wait_shutdown() => {}
         }
     }));
-    
+
     Ok(())
 }

@@ -12,9 +12,9 @@ enum Status {
 }
 
 async fn listen(updater: &Updater) -> io::Result<Status> {
-    // stdin is globally shared so this also needs to be globally shared
-    // it won't end too well if we restart only to have to threads trying to read from stdin
-    // and, we use a tokio mutex as we hold the receiver across a recv await point
+    // stdin is globally shared, so this also needs to be globally shared.
+    // it won't end too well if we restart only to have to thread trying to read from stdin,
+    // and we use a tokio mutex as we hold the receiver across a recv await point.
     static LINES: Lazy<Mutex<Receiver<io::Result<String>>>> = Lazy::new(|| {
         let (tx, rx) = tokio::sync::mpsc::channel(2);
 
@@ -47,7 +47,7 @@ async fn listen(updater: &Updater) -> io::Result<Status> {
 }
 
 #[cfg(debug_assertions)]
-pub fn subscribe(updaters_manager: &mut UpdatersManager)  -> Result<(), Infallible> {
+pub fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<(), Infallible> {
     let (updater, jh_entry) = updaters_manager.add_updater("console-listener");
     jh_entry.insert(tokio::spawn(async move {
         let res = tokio::select! {
@@ -62,10 +62,12 @@ pub fn subscribe(updaters_manager: &mut UpdatersManager)  -> Result<(), Infallib
             Err(e) => updater.exit(Err(e)),
         }
     }));
-    
+
     Ok(())
 }
 
 #[cfg(not(debug_assertions))]
 #[inline]
-pub fn subscribe(_: &mut UpdatersManager) -> Result<(), Infallible> { Ok(()) }
+pub fn subscribe(_: &mut UpdatersManager) -> Result<(), Infallible> {
+    Ok(())
+}

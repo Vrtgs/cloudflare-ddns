@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::network_listener::has_internet;
 use crate::retrying_client::RetryingClient;
 use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
-use crate::util::{new_skip_interval, num_cpus, EscapeExt};
+use crate::util::{new_skip_interval, EscapeExt};
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
 use serde::Deserialize;
@@ -206,8 +206,7 @@ async fn real_main() -> Result<Action> {
     err::exit::subscribe(&mut updaters_manager)?;
     network_listener::subscribe(&mut updaters_manager)?;
     console_listener::subscribe(&mut updaters_manager)?;
-    let cfg_store = config::listener::subscribe(&mut updaters_manager)
-        .await?;
+    let cfg_store = config::listener::subscribe(&mut updaters_manager).await?;
 
     // 1 hour
     // this will be controlled by config
@@ -258,7 +257,7 @@ fn make_runtime() -> Runtime {
 #[cfg(not(feature = "trace"))]
 fn make_runtime() -> Runtime {
     tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(num_cpus().get())
+        .worker_threads(util::num_cpus().get())
         .enable_all()
         .build()
         .expect("failed to build runtime")
@@ -284,13 +283,11 @@ fn main() -> ExitCode {
             Ok(Err(e)) => {
                 dbg_println!("Fatal Error");
                 dbg_println!("Aborting...");
-                runtime.shutdown_background();
-                
-                let msg = e.to_string();
-                err::err(&msg);
-                panic!("{msg}")
-            },
-            
+                thread::spawn(move || drop(runtime));
+                err::err(&e.to_string());
+                std::process::abort()
+            }
+
             // Recoverable
             Ok(Ok(Action::Restart)) => dbg_println!("Restarting..."),
             Err(_) => {

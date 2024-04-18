@@ -2,8 +2,8 @@ use crate::config::ip_source::Sources;
 use crate::config::{ApiFields, CfgInner, Config};
 use crate::updaters::{Updater, UpdatersManager};
 use crate::{util, MessageBoxes};
-use anyhow::{anyhow, Context};
 use anyhow::Result;
+use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use notify_debouncer_full::{
@@ -195,7 +195,8 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<ConfigS
         }
     };
 
-    let api_fields = ApiFields::from_file("./config/config.toml").await
+    let api_fields = ApiFields::from_file("./config/config.toml")
+        .await
         .with_context(|| "Invalid API Fields Config")?;
 
     let cfg = Arc::new(ArcSwap::new(Arc::new(CfgInner::new(

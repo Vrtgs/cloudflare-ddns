@@ -157,7 +157,7 @@ fn hook(info: &PanicInfo) {
                 None => try_cast!([$payload] $($rest),* |> $default),
             }
         };
-        ([$payload:expr] |> $default: expr) => { $default };
+        ([$_:expr] |> $default: expr) => { $default };
     }
 
     let msg = try_cast!([info.payload()] String,&str,Box<str>,Rc<str>,Arc<str>,Cow<str> |> "dyn Any + Send + 'static");
