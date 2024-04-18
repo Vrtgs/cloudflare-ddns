@@ -1,7 +1,7 @@
 use crate::config::ip_source::Sources;
 use crate::config::{ApiFields, CfgInner, Config};
 use crate::updaters::{Updater, UpdatersManager};
-use crate::{util, MessageBoxes};
+use crate::{UserMessages, util};
 use anyhow::Result;
 use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
@@ -45,7 +45,7 @@ impl DebounceEventHandler for FsEventHandler {
 async fn listen(
     cfg: Weak<ArcSwap<CfgInner>>,
     updater: &Updater,
-    msg_bx_handle: MessageBoxes,
+    msg_bx_handle: UserMessages,
 ) -> Result<()> {
     let (tx, mut rx) = tokio::sync::watch::channel(Ok(vec![]));
 
@@ -159,7 +159,7 @@ async fn listen(
 }
 
 pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<ConfigStorage> {
-    let msg_bx_handle = updaters_manager.message_boxes().clone();
+    let user_messages = updaters_manager.user_messages().clone();
     let (updater, jh_entry) = updaters_manager.add_updater("config-listener");
 
     if !util::try_exists("./config").await? {
@@ -188,7 +188,7 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<ConfigS
     let ip_sources = match Sources::from_file("./config/sources.toml").await {
         Ok(x) => x,
         Err(err) => {
-            msg_bx_handle
+            user_messages
                 .warning(format!("{err}\n\n\n\n...Using default config..."))
                 .await;
             Sources::default()
@@ -205,7 +205,7 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<ConfigS
     let cfg_weak = Arc::downgrade(&cfg);
 
     let update_task = tokio::spawn(async move {
-        let res = listen(cfg_weak, &updater, msg_bx_handle).await;
+        let res = listen(cfg_weak, &updater, user_messages).await;
         updater.exit(res)
     });
     let abort = update_task.abort_handle();

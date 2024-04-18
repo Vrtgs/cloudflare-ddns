@@ -284,7 +284,7 @@ fn main() -> ExitCode {
                 dbg_println!("Fatal Error");
                 dbg_println!("Aborting...");
                 thread::spawn(move || drop(runtime));
-                err::err(&e.to_string());
+                err::error(&e.to_string());
                 std::process::abort()
             }
 
