@@ -128,7 +128,7 @@ mod sys {
 
 #[cold]
 #[inline(never)]
-pub fn err(err: &str) {
+pub fn error(err: &str) {
     dbg_println!("Error: {err}");
     sys::err(err)
 }
@@ -165,8 +165,8 @@ fn hook(info: &PanicInfo) {
     dbg_println!("We panicked at: {msg}");
 
     match Handle::try_current().as_ref().map(Handle::runtime_flavor) {
-        Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(|| err(msg)),
-        _ => err(msg),
+        Ok(RuntimeFlavor::MultiThread) => tokio::task::block_in_place(|| error(msg)),
+        _ => error(msg),
     }
 }
 

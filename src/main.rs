@@ -34,7 +34,7 @@ mod util;
 
 struct DdnsContext {
     client: RetryingClient,
-    message_boxes: MessageBoxes,
+    user_messages: UserMessages,
 }
 
 #[derive(Debug)]
@@ -162,12 +162,12 @@ impl DdnsContext {
 }
 
 #[derive(Clone)]
-struct MessageBoxes {
+struct UserMessages {
     errors_semaphore: Arc<Semaphore>,
     warning_semaphore: Arc<Semaphore>,
 }
 
-impl MessageBoxes {
+impl UserMessages {
     async fn custom_error(&self, fun: impl FnOnce() + Send + 'static) {
         err::spawn_message_box(Arc::clone(&self.errors_semaphore), fun).await
     }
@@ -178,7 +178,7 @@ impl MessageBoxes {
 
     async fn error(&self, msg: impl Into<Cow<'static, str>>) {
         let msg = msg.into();
-        self.custom_error(move || err::err(&msg)).await
+        self.custom_error(move || err::error(&msg)).await
     }
 
     async fn warning(&self, msg: impl Into<Cow<'static, str>>) {
@@ -195,13 +195,13 @@ enum Action {
 async fn real_main() -> Result<Action> {
     let ctx = DdnsContext {
         client: RetryingClient::new(),
-        message_boxes: MessageBoxes {
+        user_messages: UserMessages {
             errors_semaphore: Arc::new(Semaphore::new(5)),
             warning_semaphore: Arc::new(Semaphore::new(5)),
         },
     };
 
-    let mut updaters_manager = UpdatersManager::new(ctx.message_boxes.clone());
+    let mut updaters_manager = UpdatersManager::new(ctx.user_messages.clone());
 
     err::exit::subscribe(&mut updaters_manager)?;
     network_listener::subscribe(&mut updaters_manager)?;
@@ -222,7 +222,7 @@ async fn real_main() -> Result<Action> {
 
                 dbg_println!("updating");
                 match ctx.run_ddns(cfg_store.load_config()).await {
-                    Err(err) => ctx.message_boxes.error(err.to_string()).await,
+                    Err(err) => ctx.user_messages.error(err.to_string()).await,
                     Ok(()) => dbg_println!("successfully updated")
                 }
             },
@@ -232,7 +232,7 @@ async fn real_main() -> Result<Action> {
                     match exit.status {
                         UpdaterExitStatus::Success => {},
                         UpdaterExitStatus::Panic | UpdaterExitStatus::Error(_) => {
-                            ctx.message_boxes.error(format!("Updater abruptly exited: {exit}")).await
+                            ctx.user_messages.error(format!("Updater abruptly exited: {exit}")).await
                         }
                         UpdaterExitStatus::TriggerExit(code) => {
                             updaters_manager.shutdown().await;
