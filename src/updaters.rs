@@ -1,4 +1,4 @@
-use crate::UserMessages;
+use crate::{abort_unreachable, UserMessages};
 use ahash::{HashMap, HashMapExt};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
@@ -93,7 +93,7 @@ impl UpdatersManager {
     #[must_use = "updater will instantly exit and trigger an exit event on drop, and you must add your JoinHandle"]
     pub fn add_updater(&mut self, name: &'static str) -> (Updater, JhEntry<'_>) {
         let Entry::Vacant(entry) = self.active_services.entry(name) else {
-            panic!("updater must have a unique name")
+            abort_unreachable!("updater must have a unique name")
         };
 
         let snd = self.snd.clone();

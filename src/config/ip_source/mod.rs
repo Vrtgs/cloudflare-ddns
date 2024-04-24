@@ -31,6 +31,7 @@ use tokio::io;
 use toml::map::Map;
 use toml::Value;
 use url::Url;
+use crate::abort_unreachable;
 
 #[derive(Debug, Error)]
 pub enum GetIpError {
@@ -93,7 +94,7 @@ impl<'de> Deserialize<'de> for StrOrBytes {
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-                let bytes_hint = seq.size_hint().map(|x| x.min(2048)).unwrap_or(2048);
+                let bytes_hint = seq.size_hint().map_or(2048, |x| x.min(2048));
 
                 let mut vec = Vec::with_capacity(bytes_hint);
 
@@ -405,13 +406,13 @@ impl Debug for Sources {
 
 impl Default for Sources {
     fn default() -> Self {
-        let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(
+        let future = Self::from_iter(
             include!("../../../default/gen/sources.array"),
             None,
             None
-        ))
-        .poll(&mut Context::from_waker(noop_waker_ref())) else {
-            panic!("bad build artifact")
+        );
+        let Poll::Ready(Ok(sources)) = pin!(future).poll(&mut Context::from_waker(noop_waker_ref())) else {
+            abort_unreachable!("bad build artifact")
         };
 
         sources

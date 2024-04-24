@@ -24,8 +24,7 @@ pub enum UpdaterError {
 pub async fn has_internet() -> bool {
     let sc = SCNetworkReachability::from(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
     sc.reachability()
-        .map(has_internet_from_flags)
-        .unwrap_or(false)
+        .map_or(false, has_internet_from_flags)
 }
 
 fn has_internet_from_flags(flags: ReachabilityFlags) -> bool {

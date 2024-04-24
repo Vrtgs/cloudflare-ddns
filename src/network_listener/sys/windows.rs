@@ -3,7 +3,7 @@
 // huge thx to
 // https://github.com/suryatmodulus/firezone/blob/7c296494bd96c34ef1c0be75285ff92566f4c12c/rust/gui-client/src-tauri/src/client/network_changes.rs
 
-use crate::dbg_println;
+use crate::{abort_unreachable, dbg_println};
 use crate::updaters::Updater;
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
@@ -83,7 +83,7 @@ macro_rules! get {
     ($x: expr) => {
         (($x)
             .as_ref()
-            .unwrap_or_else(|err| panic!("Fatal win32 api error {err}")))
+            .unwrap_or_else(|err| abort_unreachable!("Fatal win32 api error {err}")))
     };
 }
 
@@ -104,8 +104,7 @@ pub async fn has_internet() -> bool {
     fn inner() -> bool {
         NETWORK_MANGER
             .with(|x| unsafe { get!(x).IsConnectedToInternet() })
-            .map(VARIANT_BOOL::as_bool)
-            .unwrap_or(false)
+            .map_or(false, VARIANT_BOOL::as_bool)
     }
 
     tokio::task::spawn_blocking(inner)

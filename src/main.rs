@@ -15,6 +15,7 @@ use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::net::Ipv4Addr;
+use std::num::NonZeroU8;
 use std::pin::pin;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -44,6 +45,13 @@ struct Record {
 }
 
 impl DdnsContext {
+    fn new(max_errors: NonZeroU8) -> Self {
+        DdnsContext {
+            client: RetryingClient::new(),
+            user_messages: UserMessages::new(max_errors),
+        }
+    }
+    
     async fn get_ip(&self, cfg: &Config) -> Result<Ipv4Addr> {
         let last_err = Cell::new(None);
 
@@ -163,17 +171,25 @@ impl DdnsContext {
 
 #[derive(Clone)]
 struct UserMessages {
-    errors_semaphore: Arc<Semaphore>,
-    warning_semaphore: Arc<Semaphore>,
+    errors: Arc<Semaphore>,
+    warning: Arc<Semaphore>,
 }
 
 impl UserMessages {
+    fn new(max_errors: NonZeroU8) -> Self {
+        let permits = max_errors.get() as usize;
+        UserMessages {
+            errors: Arc::new(Semaphore::new(permits)),
+            warning: Arc::new(Semaphore::new(permits)),
+        }
+    }
+    
     async fn custom_error(&self, fun: impl FnOnce() + Send + 'static) {
-        err::spawn_message_box(Arc::clone(&self.errors_semaphore), fun).await
+        err::spawn_message_box(Arc::clone(&self.errors), fun).await
     }
 
     async fn custom_warning(&self, fun: impl FnOnce() + Send + 'static) {
-        err::spawn_message_box(Arc::clone(&self.warning_semaphore), fun).await
+        err::spawn_message_box(Arc::clone(&self.warning), fun).await
     }
 
     async fn error(&self, msg: impl Into<Cow<'static, str>>) {
@@ -193,13 +209,7 @@ enum Action {
 }
 
 async fn real_main() -> Result<Action> {
-    let ctx = DdnsContext {
-        client: RetryingClient::new(),
-        user_messages: UserMessages {
-            errors_semaphore: Arc::new(Semaphore::new(5)),
-            warning_semaphore: Arc::new(Semaphore::new(5)),
-        },
-    };
+    let ctx = DdnsContext::new(NonZeroU8::new(5).unwrap());
 
     let mut updaters_manager = UpdatersManager::new(ctx.user_messages.clone());
 
@@ -284,8 +294,7 @@ fn main() -> ExitCode {
                 dbg_println!("Fatal Error");
                 dbg_println!("Aborting...");
                 thread::spawn(move || drop(runtime));
-                err::error(&e.to_string());
-                std::process::abort()
+                abort!("{e}")
             }
 
             // Recoverable

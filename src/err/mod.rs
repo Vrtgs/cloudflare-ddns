@@ -27,6 +27,29 @@ fn spawn_thread(fun: impl FnOnce() + Send + 'static) {
     }
 }
 
+#[macro_export]
+macro_rules! abort {
+    ($($args:tt)*) => {{
+        use ::std::borrow::Cow;
+        let msg = ::std::format_args!($($args)*)
+            .as_str()
+            .map_or_else(
+                || Cow::Owned(::std::format!($($args)*)), 
+                Cow::Borrowed
+            );
+        
+        $crate::err::error(&msg);
+        ::std::process::abort()
+    }};
+}
+
+#[macro_export]
+macro_rules! abort_unreachable {
+    ($($args:tt)*) => {
+        $crate::abort!("UNREACHABLE CONDITION: {}\n\n\n\naborting...", ::std::format_args!($($args)*))
+    };
+}
+
 #[cfg(windows)]
 mod sys {
     use windows::core::{w as wide, PCWSTR};

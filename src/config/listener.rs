@@ -11,7 +11,6 @@ use notify_debouncer_full::{
 };
 use std::io;
 use std::path::Path;
-use std::pin::pin;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 use tokio::task::AbortHandle;
@@ -87,7 +86,8 @@ async fn listen(
             _ = cfg_dropped => (),
         }
     };
-    let mut shutdown = pin!(shutdown);
+    
+    tokio::pin!(shutdown);
 
     loop {
         tokio::select! {
