@@ -51,7 +51,7 @@ impl DdnsContext {
             user_messages: UserMessages::new(max_errors),
         }
     }
-    
+
     async fn get_ip(&self, cfg: &Config) -> Result<Ipv4Addr> {
         let last_err = Cell::new(None);
 
@@ -183,7 +183,7 @@ impl UserMessages {
             warning: Arc::new(Semaphore::new(permits)),
         }
     }
-    
+
     async fn custom_error(&self, fun: impl FnOnce() + Send + 'static) {
         err::spawn_message_box(Arc::clone(&self.errors), fun).await
     }

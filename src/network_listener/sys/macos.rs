@@ -23,8 +23,7 @@ pub enum UpdaterError {
 #[must_use = "its useless to check if we have internet if you dont use it"]
 pub async fn has_internet() -> bool {
     let sc = SCNetworkReachability::from(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
-    sc.reachability()
-        .map_or(false, has_internet_from_flags)
+    sc.reachability().map_or(false, has_internet_from_flags)
 }
 
 fn has_internet_from_flags(flags: ReachabilityFlags) -> bool {

@@ -1,5 +1,6 @@
 mod wasm;
 
+use crate::abort_unreachable;
 use crate::config::ip_source::wasm::with_wasm_driver;
 use crate::config::Config;
 use crate::retrying_client::RetryingClient;
@@ -31,7 +32,6 @@ use tokio::io;
 use toml::map::Map;
 use toml::Value;
 use url::Url;
-use crate::abort_unreachable;
 
 #[derive(Debug, Error)]
 pub enum GetIpError {
@@ -406,12 +406,10 @@ impl Debug for Sources {
 
 impl Default for Sources {
     fn default() -> Self {
-        let future = Self::from_iter(
-            include!("../../../default/gen/sources.array"),
-            None,
-            None
-        );
-        let Poll::Ready(Ok(sources)) = pin!(future).poll(&mut Context::from_waker(noop_waker_ref())) else {
+        let future = Self::from_iter(include!("../../../default/gen/sources.array"), None, None);
+        let Poll::Ready(Ok(sources)) =
+            pin!(future).poll(&mut Context::from_waker(noop_waker_ref()))
+        else {
             abort_unreachable!("bad build artifact")
         };
 

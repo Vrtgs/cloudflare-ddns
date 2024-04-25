@@ -1,7 +1,7 @@
 use crate::config::ip_source::Sources;
 use crate::config::{ApiFields, CfgInner, Config};
 use crate::updaters::{Updater, UpdatersManager};
-use crate::{UserMessages, util};
+use crate::{util, UserMessages};
 use anyhow::Result;
 use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
@@ -86,7 +86,7 @@ async fn listen(
             _ = cfg_dropped => (),
         }
     };
-    
+
     tokio::pin!(shutdown);
 
     loop {

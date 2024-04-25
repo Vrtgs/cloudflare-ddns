@@ -1,7 +1,6 @@
-use crate::dbg_println;
+use crate::{abort_unreachable, dbg_println};
 use reqwest::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::{Body, Client, ClientBuilder, IntoUrl, Method, Request, Response};
-use std::num::NonZeroU8;
 use std::time::Duration;
 
 macro_rules! from_static {
@@ -54,10 +53,7 @@ pub struct RetryingClient {
     client: Client,
 }
 
-const MAX_RETRY: NonZeroU8 = match NonZeroU8::new(8) {
-    Some(s) => s,
-    None => panic!("Invalid MAX_RETRY"),
-};
+const MAX_RETRY: u8 = 5;
 
 impl RetryingClient {
     pub fn new() -> Self {
@@ -67,7 +63,7 @@ impl RetryingClient {
         const IDLE_TIMEOUT: Duration = Duration::ZERO; // instant timeout
 
         #[cfg(not(feature = "trace"))]
-        const IDLE_TIMEOUT: Option<Duration> = TIMEOUT.checked_mul(MAX_RETRY.get() as u32);
+        const IDLE_TIMEOUT: Option<Duration> = TIMEOUT.checked_mul(MAX_RETRY as u32 + 1);
 
         let builder = ClientBuilder::new();
         #[cfg(feature = "trace")]
@@ -75,7 +71,9 @@ impl RetryingClient {
 
         builder
             .timeout(TIMEOUT)
+            .hickory_dns(false)
             .pool_idle_timeout(IDLE_TIMEOUT)
+            .pool_max_idle_per_host(usize::MAX)
             .use_rustls_tls()
             .build()
             .map(|c| RetryingClient { client: c })
@@ -104,7 +102,7 @@ impl RetryingClient {
     pub async fn execute(&self, req: Request) -> reqwest::Result<Response> {
         let mut i = 0_u8;
         loop {
-            if i >= (MAX_RETRY.get() - 1) {
+            if i >= MAX_RETRY {
                 break;
             }
 
@@ -116,7 +114,7 @@ impl RetryingClient {
                     }
                 }
             } else {
-                break dbg_println!("tried to use a streaming request");
+                abort_unreachable!("tried to use a streaming request");
             }
 
             i += 1

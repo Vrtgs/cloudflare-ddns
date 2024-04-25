@@ -3,8 +3,8 @@
 // huge thx to
 // https://github.com/suryatmodulus/firezone/blob/7c296494bd96c34ef1c0be75285ff92566f4c12c/rust/gui-client/src-tauri/src/client/network_changes.rs
 
-use crate::{abort_unreachable, dbg_println};
 use crate::updaters::Updater;
+use crate::{abort_unreachable, dbg_println};
 use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
 use std::pin::Pin;
