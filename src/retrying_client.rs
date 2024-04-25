@@ -1,4 +1,4 @@
-use crate::{abort_unreachable, dbg_println};
+use crate::abort_unreachable;
 use reqwest::header::{HeaderName, HeaderValue, CONTENT_TYPE};
 use reqwest::{Body, Client, ClientBuilder, IntoUrl, Method, Request, Response};
 use std::time::Duration;
