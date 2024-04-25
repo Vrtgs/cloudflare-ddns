@@ -157,15 +157,15 @@ impl DdnsContext {
         Ok(())
     }
 
-    pub async fn run_ddns(&self, cfg: Config) -> Result<()> {
+    pub async fn run_ddns(&self, cfg: Config) -> Result<bool> {
         let (record, current_ip) = try_join!(self.get_record(&cfg), self.get_ip(&cfg))?;
 
         if record.ip == current_ip {
-            dbg_println!("IP didn't change skipping record update");
-            return Ok(());
+            return Ok(false);
         }
 
-        self.update_record(&record.id, current_ip, &cfg).await
+        self.update_record(&record.id, current_ip, &cfg).await?;
+        Ok(true)
     }
 }
 
@@ -233,7 +233,8 @@ async fn real_main() -> Result<Action> {
                 dbg_println!("updating");
                 match ctx.run_ddns(cfg_store.load_config()).await {
                     Err(err) => ctx.user_messages.error(err.to_string()).await,
-                    Ok(()) => dbg_println!("successfully updated")
+                    Ok(true) => dbg_println!("successfully updated"),
+                    Ok(false) => dbg_println!("IP didn't change skipping record update"),
                 }
             },
             res = updaters_manager.watch() => match res {
