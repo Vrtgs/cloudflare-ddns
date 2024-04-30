@@ -29,10 +29,11 @@ pub struct UpdaterExit {
 
 impl UpdaterExit {
     /// returns the name of the exited service
+    #[allow(dead_code)] // future flexibility
     pub fn name(&self) -> &str {
         self.name
     }
-    
+
     pub fn status(&self) -> &UpdaterExitStatus {
         &self.status
     }
