@@ -240,7 +240,7 @@ async fn real_main() -> Result<Action> {
             res = updaters_manager.watch() => match res {
                 UpdaterEvent::Update => interval.reset_immediately(),
                 UpdaterEvent::ServiceEvent(exit) => {
-                    match exit.status {
+                    match *exit.status() {
                         UpdaterExitStatus::Success => {},
                         UpdaterExitStatus::Panic | UpdaterExitStatus::Error(_) => {
                             ctx.user_messages.error(format!("Updater abruptly exited: {exit}")).await

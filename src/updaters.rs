@@ -27,6 +27,17 @@ pub struct UpdaterExit {
     status: UpdaterExitStatus,
 }
 
+impl UpdaterExit {
+    /// returns the name of the exited service
+    pub fn name(&self) -> &str {
+        self.name
+    }
+    
+    pub fn status(&self) -> &UpdaterExitStatus {
+        &self.status
+    }
+}
+
 impl Display for UpdaterExitStatus {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
