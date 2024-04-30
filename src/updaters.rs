@@ -23,8 +23,8 @@ pub enum UpdaterExitStatus {
 }
 
 pub struct UpdaterExit {
-    pub name: &'static str,
-    pub status: UpdaterExitStatus,
+    name: &'static str,
+    status: UpdaterExitStatus,
 }
 
 impl Display for UpdaterExitStatus {
@@ -76,12 +76,13 @@ impl UpdatersManager {
         tokio::select! {
             _ = self.notifier.notified() => UpdaterEvent::Update,
             state = self.rcv.recv() => {
-                let state = state
-                    .expect("we always hold at least one sender, and we never close");
+                let Some(state) = state else {
+                    abort_unreachable!("channel should never close we always hold at least one sender")
+                };
 
                 assert!(
                     self.active_services.remove(state.name).is_some(),
-                    "the updater didn't give a join handle"
+                    "the updater {name} didn't give a join handle", name = state.name
                 );
 
                 UpdaterEvent::ServiceEvent(state)

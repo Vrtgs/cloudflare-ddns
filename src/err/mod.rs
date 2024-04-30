@@ -52,49 +52,45 @@ macro_rules! abort_unreachable {
 
 #[cfg(windows)]
 mod sys {
+    use std::ffi::OsStr;
+    use std::num::NonZeroU16;
+    use std::os::windows::ffi::OsStrExt;
     use windows::core::{w as wide, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, MB_ICONERROR, MB_ICONWARNING, MB_OK,
+        MessageBoxW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE,
     };
 
-    fn encode_wide(str: &str) -> Vec<u16> {
-        str.encode_utf16().chain([0u16]).collect::<Vec<u16>>()
+    fn encode_wide(str: &OsStr) -> Vec<u16> {
+        str.encode_wide()
+            .filter_map(NonZeroU16::new)
+            .map(NonZeroU16::get)
+            .chain([0u16])
+            .collect::<Vec<u16>>()
     }
 
     /// # Safety:
-    ///   `err`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
-    unsafe fn err_utf16(err: PCWSTR) {
+    ///   `caption`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
+    unsafe fn present_alert(caption: PCWSTR, msg: &OsStr, style: MESSAGEBOX_STYLE) {
+        let msg = encode_wide(msg);
         unsafe {
-            MessageBoxW(
-                None,
-                err,
-                wide!("CloudFlare DDNS Error"),
-                MB_OK | MB_ICONERROR,
-            );
-        }
-    }
-
-    /// # Safety:
-    ///   `warning`: has to be a valid, aligned pointer to a constant null-terminated string of 16-bit Unicode characters.
-    unsafe fn warn_utf16(warning: PCWSTR) {
-        unsafe {
-            MessageBoxW(
-                None,
-                warning,
-                wide!("CloudFlare DDNS Warning"),
-                MB_OK | MB_ICONWARNING,
-            );
+            MessageBoxW(None, PCWSTR::from_raw(msg.as_ptr()), caption, MB_OK | style);
         }
     }
 
     pub fn warn(warning: &str) {
-        let warning = encode_wide(warning);
-        unsafe { warn_utf16(PCWSTR::from_raw(warning.as_ptr())) }
+        // # Safety: caption was made by teh wide macro which is valid
+        unsafe {
+            present_alert(
+                wide!("CloudFlare DDNS Warning"),
+                warning.as_ref(),
+                MB_ICONWARNING,
+            )
+        }
     }
 
     pub fn err(err: &str) {
-        let err = encode_wide(err);
-        unsafe { err_utf16(PCWSTR::from_raw(err.as_ptr())) }
+        // # Safety: caption was made by teh wide macro which is valid
+        unsafe { present_alert(wide!("CloudFlare DDNS Warning"), err.as_ref(), MB_ICONERROR) }
     }
 }
 

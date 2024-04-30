@@ -292,7 +292,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(exit);
             }
             Ok(Err(e)) => {
-                dbg_println!("Fatal Error");
+                dbg_println!("Fatal init error");
                 dbg_println!("Aborting...");
                 thread::spawn(move || drop(runtime));
                 abort!("{e}")

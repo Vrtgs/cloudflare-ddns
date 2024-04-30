@@ -208,12 +208,12 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<ConfigS
         let res = listen(cfg_weak, &updater, user_messages).await;
         updater.exit(res)
     });
-    let abort = update_task.abort_handle();
+    let storage = ConfigStorage {
+        cfg,
+        update_task: update_task.abort_handle(),
+    };
 
     jh_entry.insert(update_task);
 
-    Ok(ConfigStorage {
-        cfg,
-        update_task: abort,
-    })
+    Ok(storage)
 }
