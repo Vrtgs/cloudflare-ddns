@@ -18,13 +18,11 @@ mod sys {
         let mut ctrl_c = signal::ctrl_c().unwrap();
         let mut r#break = signal::ctrl_break().unwrap();
         let mut close = signal::ctrl_close().unwrap();
-        let mut logoff = signal::ctrl_logoff().unwrap();
         let mut shutdown = signal::ctrl_shutdown().unwrap();
         wait_for_any!(
             ctrl_c.recv(),
             r#break.recv(),
             close.recv(),
-            logoff.recv(),
             shutdown.recv()
         )
     }
