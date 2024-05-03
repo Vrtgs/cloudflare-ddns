@@ -1,5 +1,4 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-#![feature(addr_parse_ascii)]
 
 extern crate core;
 

@@ -1,13 +1,11 @@
-
-
 #[cfg(debug_assertions)]
 mod r#impl {
-    use std::{io, thread};
-    use std::convert::Infallible;
+    use crate::updaters::{Updater, UpdatersManager};
     use once_cell::sync::Lazy;
+    use std::convert::Infallible;
+    use std::{io, thread};
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::Mutex;
-    use crate::updaters::{Updater, UpdatersManager};
 
     enum Status {
         Success,
@@ -54,9 +52,9 @@ mod r#impl {
         let (updater, jh_entry) = updaters_manager.add_updater("console-listener");
         jh_entry.insert(tokio::spawn(async move {
             let res = tokio::select! {
-            _ = updater.wait_shutdown() => Ok(Status::Success),
-            res = listen(&updater) => res,
-        };
+                _ = updater.wait_shutdown() => Ok(Status::Success),
+                res = listen(&updater) => res,
+            };
 
             match res {
                 Ok(Status::Success) => updater.exit(Ok::<(), Infallible>(())),
@@ -74,7 +72,7 @@ mod r#impl {
 mod r#impl {
     use crate::updaters::UpdatersManager;
     use std::convert::Infallible;
-    
+
     #[inline]
     pub fn subscribe(_: &mut UpdatersManager) -> Result<(), Infallible> {
         Ok(())

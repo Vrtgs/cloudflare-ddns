@@ -2,9 +2,8 @@
 #[cfg_attr(target_os = "macos", path = "macos.rs")]
 mod sys_common;
 
-use std::convert::Infallible;
 use crate::updaters::UpdatersManager;
-
+use std::convert::Infallible;
 
 pub use sys_common::has_internet;
 pub fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<(), Infallible> {

@@ -1,10 +1,25 @@
 use std::fmt::{Display, Formatter, Write};
 use std::io;
+use std::net::{self, Ipv4Addr};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Duration;
+use thiserror::Error;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
+
+#[macro_export]
+macro_rules! non_zero {
+    ($lit: literal) => {{
+        const _: () = {
+            if $lit == 0 {
+                panic!("non zero literal can't be 0")
+            }
+        };
+        $lit.try_into().unwrap()
+    }};
+}
 
 #[inline]
 pub fn num_cpus() -> NonZeroUsize {
@@ -13,7 +28,7 @@ pub fn num_cpus() -> NonZeroUsize {
     #[cold]
     #[inline(never)]
     fn num_cpus_uncached() -> NonZeroUsize {
-        std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN)
+        std::thread::available_parallelism().unwrap_or(non_zero!(1))
     }
 
     *NUM_CPUS.get_or_init(num_cpus_uncached)
@@ -80,5 +95,32 @@ pub trait EscapeExt {
 impl EscapeExt for str {
     fn escape_json(&self) -> EscapeJson<'_> {
         EscapeJson(self)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum AddrParseError {
+    #[error("The input data was too long to even be considered an address")]
+    TooLong,
+    #[error("invalid encoding on the addresses bytes")]
+    InvalidEncoding,
+    #[error(transparent)]
+    Parse(#[from] net::AddrParseError),
+}
+
+pub trait AddrParseExt: Sized {
+    fn parse_ascii_bytes(b: &[u8]) -> Result<Self, AddrParseError>;
+}
+
+impl AddrParseExt for Ipv4Addr {
+    fn parse_ascii_bytes(b: &[u8]) -> Result<Self, AddrParseError> {
+        if b.len() > b"xxx.xxx.xxx.xxx".len() {
+            return Err(AddrParseError::TooLong);
+        }
+
+        b.is_ascii()
+            .then(|| unsafe { std::str::from_utf8_unchecked(b) })
+            .ok_or(AddrParseError::InvalidEncoding)
+            .and_then(|s| Ipv4Addr::from_str(s).map_err(Into::into))
     }
 }

@@ -1,10 +1,10 @@
 mod wasm;
 
-use crate::abort_unreachable;
 use crate::config::ip_source::wasm::with_wasm_driver;
 use crate::config::Config;
 use crate::retrying_client::RetryingClient;
-use crate::util::num_cpus;
+use crate::util::{num_cpus, AddrParseError, AddrParseExt};
+use crate::{abort_unreachable, non_zero};
 use anyhow::Result;
 use bytes::Bytes;
 use futures::task::noop_waker_ref;
@@ -20,7 +20,7 @@ use std::convert::Infallible;
 use std::fmt::{Debug, Formatter, Write};
 use std::future::Future;
 use std::io::ErrorKind;
-use std::net::{AddrParseError, Ipv4Addr};
+use std::net::Ipv4Addr;
 use std::num::NonZeroU8;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -227,7 +227,7 @@ impl Process {
             }
         }
 
-        Ok(Ipv4Addr::parse_ascii(&bytes)?)
+        Ok(Ipv4Addr::parse_ascii_bytes(&bytes)?)
     }
 }
 
@@ -308,8 +308,13 @@ impl Sources {
                 driver_path: driver_path
                     .unwrap_or_else(|| Box::from(Path::new("./ddns-wasm-runtime.dll"))),
                 // safety: 16 is not = to 0, lol
-                concurrent_resolve: concurrent_resolve
-                    .unwrap_or(unsafe { NonZeroU8::new_unchecked(16) }),
+                concurrent_resolve: concurrent_resolve.unwrap_or_else(|| {
+                    // 4 requests a core is a reasonable default
+                    num_cpus()
+                        .saturating_mul(non_zero!(4))
+                        .try_into()
+                        .unwrap_or(NonZeroU8::MAX)
+                }),
             })
     }
 
@@ -394,22 +399,19 @@ impl Debug for Sources {
                     .ne(Path::new("./ddns-wasm-runtime.dll"))
                     .then_some(("driver-path", &*self.driver_path)),
             )
-            .entries(
-                self.concurrent_resolve
-                    .get()
-                    .ne(&16)
-                    .then_some(("concurrent-resolve", self.concurrent_resolve)),
-            )
+            .entry(&"concurrent-resolve", &self.concurrent_resolve)
             .finish()
     }
 }
 
 impl Default for Sources {
     fn default() -> Self {
-        let future = Self::from_iter(include!("../../../default/gen/sources.array"), None, None);
-        let Poll::Ready(Ok(sources)) =
-            pin!(future).poll(&mut Context::from_waker(noop_waker_ref()))
-        else {
+        let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(
+            include!("../../../default/gen/sources.array"),
+            None,
+            None
+        ))
+        .poll(&mut Context::from_waker(noop_waker_ref())) else {
             abort_unreachable!("bad build artifact")
         };
 
