@@ -77,7 +77,7 @@ impl<'de> Deserialize<'de> for Zone {
         #[derive(Deserialize)]
         struct ZoneInner {
             id: Box<str>,
-            record: Box<str>,
+            record: String,
 
             #[serde(default)]
             proxied: bool,
