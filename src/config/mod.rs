@@ -2,14 +2,15 @@ use crate::config::ip_source::{IpSource, Sources};
 use crate::retrying_client::{RequestBuilder, AUTHORIZATION_EMAIL, AUTHORIZATION_KEY};
 use anyhow::Result;
 use reqwest::header::{HeaderValue, AUTHORIZATION};
-use serde::de::Error;
 use serde::{Deserialize, Deserializer};
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
+use serde::de::Error;
 
 pub mod ip_source;
 pub mod listener;
+mod punycode;
 
 #[derive(Eq, Ord, PartialOrd, PartialEq, Debug)]
 enum Auth {
@@ -24,12 +25,12 @@ pub struct Account {
 }
 
 macro_rules! invalid_header {
-            ($field:literal) => {
-                Error::custom(
-                    concat!($field, " can't be parsed as a valid punycode http header less than or equal to 255 charachters long")
-                )
-            };
-        }
+    ($field:literal) => {
+        Error::custom(
+            concat!($field, " can't be parsed as a valid http header")
+        )
+    };
+}
 
 impl<'de> Deserialize<'de> for Account {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
@@ -64,13 +65,36 @@ impl<'de> Deserialize<'de> for Account {
     }
 }
 
-#[derive(Eq, Ord, PartialOrd, PartialEq, Deserialize, Debug)]
+#[derive(Eq, Ord, PartialOrd, PartialEq, Debug)]
 pub struct Zone {
     id: Box<str>,
     record: Box<str>,
+    proxied: bool
+}
 
-    #[serde(default)]
-    proxied: bool,
+impl<'de> Deserialize<'de> for Zone {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error> where D: Deserializer<'de> { 
+        #[derive(Deserialize)]
+        struct ZoneInner {
+            id: Box<str>,
+            record: Box<str>,
+
+            #[serde(default)]
+            proxied: bool,
+        }
+        
+        let ZoneInner { id, record, proxied } = ZoneInner::deserialize(deserializer)?;
+        
+        let record = idna::domain_to_ascii(&record).map_err(|_| {
+            Error::custom("Invalid UTS #46 domain")
+        })?.into_boxed_str();
+        
+        Ok(Zone {
+            id,
+            record,
+            proxied
+        })
+    }
 }
 
 impl Zone {
@@ -121,7 +145,7 @@ impl CfgInner {
     }
 }
 
-/// Cheap clone to read-only config
+/// Cheaply cloneable to read-only config
 #[derive(Debug, Clone)]
 pub struct Config(Arc<CfgInner>);
 

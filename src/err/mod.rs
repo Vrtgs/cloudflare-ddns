@@ -78,7 +78,7 @@ mod sys {
     }
 
     pub fn warn(warning: &str) {
-        // # Safety: caption was made by teh wide macro which is valid
+        // # Safety: caption was made by the wide macro which is valid
         unsafe {
             present_alert(
                 wide!("CloudFlare DDNS Warning"),
@@ -89,7 +89,7 @@ mod sys {
     }
 
     pub fn err(err: &str) {
-        // # Safety: caption was made by teh wide macro which is valid
+        // # Safety: caption was made by the wide macro which is valid
         unsafe { present_alert(wide!("CloudFlare DDNS Warning"), err.as_ref(), MB_ICONERROR) }
     }
 }

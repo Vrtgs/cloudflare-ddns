@@ -9,7 +9,6 @@ use bincode::{enc, Decode, Encode};
 use dashmap::DashMap;
 use interprocess::local_socket::tokio::{RecvHalf, SendHalf, Stream as LocalSocketStream};
 use interprocess::local_socket::traits::tokio::Stream;
-use interprocess::local_socket::GenericNamespaced;
 use std::io::ErrorKind::UnexpectedEof;
 use std::path::Path;
 use std::process::Stdio;
@@ -76,10 +75,14 @@ async fn ipc_channel(child: &mut Child) -> Result<(RecvHalf, SendHalf)> {
 
         #[cfg(unix)]
         {
-            interprocess::local_socket::ToFsName::to_fs_name(path)?
+            use interprocess::local_socket::GenericFilePath;
+            
+            interprocess::local_socket::ToFsName::to_fs_name::<GenericFilePath>(path)?
         }
         #[cfg(windows)]
         {
+            use interprocess::local_socket::GenericNamespaced;
+            
             interprocess::local_socket::ToNsName::to_ns_name::<GenericNamespaced>(path)?
         }
     };

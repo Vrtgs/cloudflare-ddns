@@ -218,8 +218,8 @@ async fn real_main() -> Result<Action> {
     console_listener::subscribe(&mut updaters_manager)?;
     let cfg_store = config::listener::subscribe(&mut updaters_manager).await?;
 
-    // 1 hour
-    // this will be controlled by config
+    // 1-hour
+    // config will control this
     let mut interval = new_skip_interval(Duration::from_secs(60 * 60));
 
     loop {
