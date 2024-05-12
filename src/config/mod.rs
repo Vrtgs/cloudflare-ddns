@@ -90,8 +90,10 @@ impl<'de> Deserialize<'de> for Zone {
             proxied,
         } = ZoneInner::deserialize(deserializer)?;
 
-        let record = idna::domain_to_ascii(&record)
-            .map_err(|_| Error::custom("Invalid UTS #46 domain"))?
+        let record = idna::Config::default()
+            .verify_dns_length(true)
+            .to_ascii(&record)
+            .map_err(|e| Error::custom(format_args!("Invalid UTS #46 domain {e}")))?
             .into_boxed_str();
 
         Ok(Zone {
