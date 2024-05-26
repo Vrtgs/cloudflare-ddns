@@ -19,6 +19,7 @@ use std::pin::pin;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::thread;
+use std::thread::Builder;
 use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
@@ -278,7 +279,7 @@ fn main() -> ExitCode {
     #[cfg(feature = "trace")]
     console_subscriber::init();
 
-    let runtime = make_runtime();
+    let mut runtime = make_runtime();
     loop {
         let exit = std::panic::catch_unwind(|| runtime.block_on(real_main()));
 
@@ -293,13 +294,19 @@ fn main() -> ExitCode {
             Ok(Err(e)) => {
                 dbg_println!("Fatal init error");
                 dbg_println!("Aborting...");
-                thread::spawn(move || drop(runtime));
+                // best effort clean up
+                let _ = Builder::new().spawn(move || drop(runtime));
                 abort!("{e}")
             }
 
             // Recoverable
             Ok(Ok(Action::Restart)) => dbg_println!("Restarting..."),
             Err(_) => {
+                // old runtime might be in an invalid state
+                // replace it and drop it on a new thread to avoid hanging
+                let old_runtime = std::mem::replace(&mut runtime, make_runtime());
+                thread::spawn(move || drop(old_runtime));
+
                 dbg_println!("Panicked!!");
                 dbg_println!("Retrying in 15s...");
                 thread::sleep(Duration::from_secs(15));

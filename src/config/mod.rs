@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 pub mod ip_source;
 pub mod listener;
-mod punycode;
 
 #[derive(Eq, Ord, PartialOrd, PartialEq, Debug)]
 enum Auth {
