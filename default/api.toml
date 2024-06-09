@@ -3,5 +3,6 @@ email     =
 api-token = 
 
 [zone]
-id     = 
-record = 
+id     =
+record =
+# proxied = false

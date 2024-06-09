@@ -1,151 +1,47 @@
+use crate::config::api_fields::{Account, ApiFields, Auth, Zone};
+use crate::config::http::HttpConfig;
 use crate::config::ip_source::{IpSource, Sources};
+use crate::config::misc::MiscConfig;
 use crate::retrying_client::{RequestBuilder, AUTHORIZATION_EMAIL, AUTHORIZATION_KEY};
-use anyhow::Result;
-use reqwest::header::{HeaderValue, AUTHORIZATION};
-use serde::de::Error;
-use serde::{Deserialize, Deserializer};
+use reqwest::header::AUTHORIZATION;
 use std::num::NonZeroU8;
 use std::path::Path;
 use std::sync::Arc;
 
+pub mod api_fields;
+mod http;
 pub mod ip_source;
 pub mod listener;
+mod misc;
+mod time;
 
-#[derive(Eq, Ord, PartialOrd, PartialEq, Debug)]
-enum Auth {
-    Token(HeaderValue),
-    Key(HeaderValue),
+trait Deserializable: Sized {
+    async fn deserialize(text: &str) -> anyhow::Result<Self>;
 }
 
-#[derive(Eq, Ord, PartialOrd, PartialEq, Debug)]
-pub struct Account {
-    email: HeaderValue,
-    auth: Auth,
+async fn deserialize_from_file<T: Deserializable>(path: impl AsRef<Path>) -> anyhow::Result<T> {
+    T::deserialize(&tokio::fs::read_to_string(path).await?).await
 }
 
-macro_rules! invalid_header {
-    ($field:literal) => {
-        Error::custom(concat!($field, " can't be parsed as a valid http header"))
-    };
-}
-
-impl<'de> Deserialize<'de> for Account {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct AccountInner {
-            email: Box<str>,
-            #[serde(alias = "api-token")]
-            auth_token: Option<Box<str>>,
-            #[serde(alias = "auth-key")]
-            auth_key: Option<Box<str>>,
-        }
-        let inner = AccountInner::deserialize(deserializer)?;
-
-        let email = HeaderValue::from_str(&inner.email).map_err(|_| invalid_header!("email"))?;
-
-        let auth = match (inner.auth_token, inner.auth_key) {
-            (Some(token), None) => Auth::Token(
-                HeaderValue::from_str(&("Bearer ".to_owned() + &token))
-                    .map_err(|_| invalid_header!("auth-token"))?,
-            ),
-            (None, Some(key)) => {
-                Auth::Key(HeaderValue::from_str(&key).map_err(|_| invalid_header!("auth-key"))?)
-            }
-            (None, None) => return Err(Error::missing_field("auth-token")),
-            (Some(_), Some(_)) => return Err(Error::custom("auth-token and auth-key conflict")),
-        };
-
-        Ok(Account { auth, email })
-    }
-}
-
-#[derive(Eq, Ord, PartialOrd, PartialEq, Debug)]
-pub struct Zone {
-    id: Box<str>,
-    record: Box<str>,
-    proxied: bool,
-}
-
-impl<'de> Deserialize<'de> for Zone {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct ZoneInner {
-            id: Box<str>,
-            record: String,
-
-            #[serde(default)]
-            proxied: bool,
-        }
-
-        let ZoneInner {
-            id,
-            record,
-            proxied,
-        } = ZoneInner::deserialize(deserializer)?;
-
-        let record = idna::Config::default()
-            .verify_dns_length(true)
-            .to_ascii(&record)
-            .map_err(|e| Error::custom(format_args!("Invalid UTS #46 domain {e}")))?
-            .into_boxed_str();
-
-        Ok(Zone {
-            id,
-            record,
-            proxied,
-        })
-    }
-}
-
-impl Zone {
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub fn record(&self) -> &str {
-        &self.record
-    }
-
-    pub fn proxied(&self) -> bool {
-        self.proxied
-    }
-}
-
-#[derive(Eq, Ord, PartialOrd, PartialEq, Deserialize, Debug)]
-pub struct ApiFields {
-    account: Account,
-    zone: Zone,
-}
-
-impl ApiFields {
-    pub(crate) fn deserialize(text: &str) -> Result<Self> {
-        Ok(toml::de::from_str(text)?)
-    }
-
-    pub(crate) async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        Self::deserialize(&tokio::fs::read_to_string(path).await?)
-    }
-}
-
-#[derive(Debug, Eq, Ord, PartialOrd, PartialEq)]
+#[derive(Debug, Eq, Ord, PartialOrd, PartialEq, Clone)]
 pub(crate) struct CfgInner {
     api_fields: Arc<ApiFields>,
+    http: Arc<HttpConfig>,
+    misc: Arc<MiscConfig>,
     ip_sources: Arc<Sources>,
 }
 
 impl CfgInner {
     pub(crate) fn new(
-        api_fields: impl Into<Arc<ApiFields>>,
-        ip_sources: impl Into<Arc<Sources>>,
+        api_fields: ApiFields,
+        http: HttpConfig,
+        misc: MiscConfig,
+        ip_sources: Sources,
     ) -> Self {
         Self {
             api_fields: api_fields.into(),
+            http: http.into(),
+            misc: misc.into(),
             ip_sources: ip_sources.into(),
         }
     }
@@ -158,6 +54,14 @@ pub struct Config(Arc<CfgInner>);
 impl Config {
     pub fn ip_sources(&self) -> impl Iterator<Item = IpSource> + '_ {
         self.0.ip_sources.sources()
+    }
+
+    pub fn http(&self) -> &HttpConfig {
+        &self.0.http
+    }
+
+    pub fn misc(&self) -> &MiscConfig {
+        &self.0.misc
     }
 
     pub fn zone(&self) -> &Zone {

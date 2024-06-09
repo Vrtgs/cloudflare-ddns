@@ -1,7 +1,7 @@
 mod wasm;
 
 use crate::config::ip_source::wasm::with_wasm_driver;
-use crate::config::Config;
+use crate::config::{Config, Deserializable};
 use crate::retrying_client::RetryingClient;
 use crate::util::{num_cpus, AddrParseError, AddrParseExt};
 use crate::{abort_unreachable, non_zero};
@@ -307,7 +307,8 @@ impl Sources {
                 sources,
                 driver_path: driver_path
                     .unwrap_or_else(|| Box::from(Path::new("./ddns-wasm-runtime.dll"))),
-                // safety: 16 is not = to 0, lol
+                // # Safety:
+                // 16 is not = to 0, lol
                 concurrent_resolve: concurrent_resolve.unwrap_or_else(|| {
                     // 4 requests a core is a reasonable default
                     num_cpus()
@@ -336,11 +337,22 @@ impl Sources {
         .await
     }
 
-    pub async fn deserialize_async(text: &str) -> Result<Self> {
+    pub fn sources(&self) -> impl Iterator<Item = IpSource> + '_ {
+        self.sources
+            .iter()
+            .map(|(url, process)| (url.clone(), process.clone()))
+            .map(|(url, process)| IpSource { url, process })
+    }
+}
+
+impl Deserializable for Sources {
+    async fn deserialize(text: &str) -> Result<Self> {
         #[derive(Deserialize)]
         struct ProcessIntermediate {
             steps: Vec<ProcessStep>,
         }
+        
+        
 
         let mut value = toml::from_str::<Map<String, Value>>(text)?;
 
@@ -374,18 +386,7 @@ impl Sources {
             driver_path,
             concurrent_resolve,
         )
-        .await
-    }
-
-    pub async fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        Self::deserialize_async(&tokio::fs::read_to_string(path).await?).await
-    }
-
-    pub fn sources(&self) -> impl Iterator<Item = IpSource> + '_ {
-        self.sources
-            .iter()
-            .map(|(url, process)| (url.clone(), process.clone()))
-            .map(|(url, process)| IpSource { url, process })
+            .await
     }
 }
 

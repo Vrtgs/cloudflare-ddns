@@ -6,7 +6,7 @@ use crate::config::ip_source::GetIpError;
 use crate::config::Config;
 use crate::network_listener::has_internet;
 use crate::retrying_client::RetryingClient;
-use crate::updaters::{UpdaterEvent, UpdaterExitStatus, UpdatersManager};
+use crate::updaters::{UpdaterEvent, UpdaterExitStatus};
 use crate::util::{new_skip_interval, EscapeExt};
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
@@ -45,10 +45,10 @@ struct Record {
 }
 
 impl DdnsContext {
-    fn new(max_errors: NonZeroU8) -> Self {
+    fn new(cfg: Config) -> Self {
         DdnsContext {
-            client: RetryingClient::new(),
-            user_messages: UserMessages::new(max_errors),
+            client: RetryingClient::new(&cfg),
+            user_messages: UserMessages::new(cfg.misc().general().max_errors()),
         }
     }
 
@@ -209,22 +209,21 @@ enum Action {
 }
 
 async fn real_main() -> Result<Action> {
-    let ctx = DdnsContext::new(NonZeroU8::new(5).unwrap());
+    let (ctx, mut updaters_manager, cfg_store) = config::listener::load().await?;
+    let network_detection = cfg_store.load_config().misc().refresh().network_detection();
 
-    let mut updaters_manager = UpdatersManager::new(ctx.user_messages.clone());
-
+    if network_detection {
+        network_listener::subscribe(&mut updaters_manager)?;
+    }
     err::exit::subscribe(&mut updaters_manager)?;
-    network_listener::subscribe(&mut updaters_manager)?;
     console_listener::subscribe(&mut updaters_manager)?;
-    let cfg_store = config::listener::subscribe(&mut updaters_manager).await?;
 
-    // 1-hour
-    // config will control this
-    let mut interval = new_skip_interval(Duration::from_secs(60 * 60));
+    let mut interval = new_skip_interval(cfg_store.load_config().misc().refresh().interval());
 
     loop {
         tokio::select! {
             _ = interval.tick() => {
+
                 if !has_internet().await {
                     dbg_println!("no internet available skipping update");
                     continue;

@@ -1,4 +1,4 @@
-use crate::{abort_unreachable, UserMessages};
+use crate::abort_unreachable;
 use ahash::{HashMap, HashMapExt};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
@@ -64,13 +64,12 @@ pub struct UpdatersManager {
     snd: UnboundedSender<UpdaterExit>,
     notifier: Arc<Notify>,
     active_services: HashMap<&'static str, JoinHandle<()>>,
-    user_messages: UserMessages,
     shutdown: tokio::sync::watch::Sender<()>,
 }
 
 impl UpdatersManager {
     #[inline(always)]
-    pub fn new(user_messages: UserMessages) -> Self {
+    pub fn new() -> Self {
         let (snd, rcv) = tokio::sync::mpsc::unbounded_channel();
         let (shutdown, _) = tokio::sync::watch::channel(());
         UpdatersManager {
@@ -78,7 +77,6 @@ impl UpdatersManager {
             snd,
             notifier: Arc::new(Notify::new()),
             active_services: HashMap::new(),
-            user_messages,
             shutdown,
         }
     }
@@ -127,11 +125,7 @@ impl UpdatersManager {
             entry,
         )
     }
-
-    pub fn user_messages(&self) -> &UserMessages {
-        &self.user_messages
-    }
-
+    
     pub async fn shutdown(self) {
         async fn forward_panic(join_handle: JoinHandle<()>) {
             if let Err(e) = join_handle.await {

@@ -1,7 +1,7 @@
 use crate::config::ip_source::Sources;
-use crate::config::{ApiFields, CfgInner, Config};
+use crate::config::{CfgInner, Config, deserialize_from_file};
 use crate::updaters::{Updater, UpdatersManager};
-use crate::{util, UserMessages};
+use crate::{non_zero, util, DdnsContext, UserMessages};
 use anyhow::Result;
 use anyhow::{anyhow, Context};
 use arc_swap::ArcSwap;
@@ -45,7 +45,7 @@ async fn listen(
     cfg: Weak<ArcSwap<CfgInner>>,
     updater: &Updater,
     msg_bx_handle: UserMessages,
-) -> Result<()> {
+) -> Result<bool> {
     let (tx, mut rx) = tokio::sync::watch::channel(Ok(vec![]));
 
     const POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -63,10 +63,9 @@ async fn listen(
             Path::new("./config/sources.toml"),
             RecursiveMode::NonRecursive,
         )?;
-        watcher.watcher().watch(
-            Path::new("./config/config.toml"),
-            RecursiveMode::NonRecursive,
-        )?;
+        watcher
+            .watcher()
+            .watch(Path::new("./config/api.toml"), RecursiveMode::NonRecursive)?;
         anyhow::Ok(watcher)
     })
     .await??;
@@ -107,61 +106,56 @@ async fn listen(
                     },
                 };
 
-                macro_rules! change_on_occurred {
+                macro_rules! change_occurred_in {
                     ($path:literal in $events:expr) => { $events.iter().any(|e| e.paths.iter().any(|p| p.ends_with($path))) };
                 }
 
-                if change_on_occurred!("sources.toml" in events) {
-                    let res = async {
-                        Sources::deserialize_async(
-                            &tokio::fs::read_to_string("./config/sources.toml").await?
-                        ).await
-                    }.await;
+                macro_rules! lazy_reload_config {
+                    ($path:literal; $part:ident; $restart:literal) => {
+                        if change_occurred_in!($path in events) {
+                            match deserialize_from_file(concat!("./config/", $path)).await {
+                                Ok(part) => {
+                                    #[allow(unreachable_code)]
+                                    #[allow(unused)]
+                                    #[allow(clippy::diverging_sub_expression)]
+                                    if false {
+                                        fn infer_part_type<T>(_: T, _: Arc<T>) -> ! {
+                                            todo!()
+                                        }
 
-                    match res {
-                        Ok(ip_sources) => {
-                            let Some(cfg) = Weak::upgrade(&cfg) else { break };
-                            let old_cfg = cfg.load();
-                            if ip_sources == *old_cfg.ip_sources { continue }
+                                        let cfg: CfgInner = ::std::unreachable!();
+                                        infer_part_type(part, cfg.$part)
+                                    }
+                                    let Some(cfg) = Weak::upgrade(&cfg) else { break };
+                                    let old_cfg = cfg.load();
+                                    if part == *old_cfg.$part { continue }
 
-                            let new_cfg = CfgInner::new(Arc::clone(&old_cfg.api_fields), ip_sources);
-                            cfg.store(Arc::new(new_cfg));
-                            if updater.update().is_err() { break }
+                                    let mut new_cfg = CfgInner::clone(&old_cfg);
+                                    new_cfg.$part = Arc::new(part);
+                                    cfg.store(Arc::new(new_cfg));
+                                    if $restart { return Ok(true); }
+                                    if updater.update().is_err() { break }
+                                }
+                                Err(e) => msg_bx_handle.warning(format!("config listen error: {e}")).await
+                            }
                         }
-                        Err(e) => msg_bx_handle.warning(format!("config listen error: {e}")).await
-                    }
+                    };
                 }
 
-                if change_on_occurred!("config.toml" in events) {
-                    let res = ApiFields::deserialize(&tokio::fs::read_to_string("./config/config.toml").await?);
-
-                    match res {
-                        Ok(api_fields) => {
-                            let Some(cfg) = Weak::upgrade(&cfg) else { break };
-                            let old_cfg = cfg.load();
-                            if api_fields == *old_cfg.api_fields { continue }
-
-
-                            let new_cfg = CfgInner::new(api_fields, Arc::clone(&old_cfg.ip_sources));
-                            cfg.store(Arc::new(new_cfg));
-                            if updater.update().is_err() { break }
-                        }
-                        Err(e) => msg_bx_handle.warning(format!("config listen error: {e}")).await
-                    }
-                }
+                lazy_reload_config!("api.toml"; api_fields; true);
+                lazy_reload_config!("http.toml"; http; true);
+                lazy_reload_config!("misc.toml";  misc; true);
+                lazy_reload_config!("sources.toml"; ip_sources; false);
             }
             _ = &mut shutdown => break,
             else => break
         }
     }
 
-    anyhow::Ok(())
+    anyhow::Ok(false)
 }
 
-pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<ConfigStorage> {
-    let user_messages = updaters_manager.user_messages().clone();
-    let (updater, jh_entry) = updaters_manager.add_updater("config-listener");
-
+pub async fn load() -> Result<(DdnsContext, UpdatersManager, ConfigStorage)> {
     if !util::try_exists("./config").await? {
         tokio::fs::create_dir_all("./config").await?;
     }
@@ -181,39 +175,66 @@ pub async fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<ConfigS
     }
 
     exists_or_include!(
+        "./config/api.toml", "../../default/api.toml";
+        "./config/http.toml", "../../default/http.toml";
+        "./config/misc.toml", "../../default/misc.toml";
         "./config/sources.toml", "../../default/gen/sources.toml";
-        "./config/config.toml", "../../default/config.toml";
     )?;
 
-    let ip_sources = match Sources::from_file("./config/sources.toml").await {
+    let ip_sources = match deserialize_from_file("./config/sources.toml").await {
         Ok(x) => x,
         Err(err) => {
-            user_messages
+            UserMessages::new(non_zero!(1))
                 .warning(format!("{err}\n\n\n\n...Using default config..."))
                 .await;
             Sources::default()
         }
     };
 
-    let api_fields = ApiFields::from_file("./config/config.toml")
-        .await
-        .with_context(|| "Invalid API Fields Config")?;
+    macro_rules! load_config {
+        ($($name:ident, $path:expr, $msg:expr $(;)+)*) => {
+            $(let $name = deserialize_from_file($path)
+                .await
+                .with_context(|| $msg)?;)*
+        };
+    }
 
-    let cfg = Arc::new(ArcSwap::new(Arc::new(CfgInner::new(
-        api_fields, ip_sources,
-    ))));
-    let cfg_weak = Arc::downgrade(&cfg);
+    load_config!(
+        http_config, "./config/http.toml", "Invalid Http config";
+        services_config, "./config/misc.toml", "Invalid Services config";
+        api_fields, "./config/api.toml", "Invalid API Fields config";
+    );
 
+    let cfg = Arc::new(CfgInner::new(
+        api_fields,
+        http_config,
+        services_config,
+        ip_sources,
+    ));
+
+    let cfg_store = Arc::new(ArcSwap::new(Arc::clone(&cfg)));
+    let cfg_weak = Arc::downgrade(&cfg_store);
+
+    let ctx = DdnsContext::new(Config(cfg));
+    let user_messages = ctx.user_messages.clone();
+    let mut updater_manager = UpdatersManager::new();
+
+
+    let (updater, jh_entry) = updater_manager.add_updater("config-listener");
     let update_task = tokio::spawn(async move {
         let res = listen(cfg_weak, &updater, user_messages).await;
-        updater.exit(res)
+        match res {
+            Ok(true) => updater.trigger_restart(),
+            Ok(false) => updater.exit(anyhow::Ok(())),
+            Err(err) => updater.exit(Err(err)),
+        }
     });
     let storage = ConfigStorage {
-        cfg,
+        cfg: cfg_store,
         update_task: update_task.abort_handle(),
     };
 
     jh_entry.insert(update_task);
 
-    Ok(storage)
+    Ok((ctx, updater_manager, storage))
 }
