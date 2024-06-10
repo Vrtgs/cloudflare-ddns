@@ -47,7 +47,7 @@ atoi                  = "2.0.0"
 arc-swap              = "1.7.1"
 notify                = "6.1.1"
 notify-debouncer-full = "0.3.1"
-idna                  = "0.5.0"
+idna                  = "1.0.0"
 
 console-subscriber = { version = "0.2.0", optional = true }
 
