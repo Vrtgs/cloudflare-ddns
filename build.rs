@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Display, Formatter, Write};
 use std::io;
 use std::path::PathBuf;
+use std::process::Stdio;
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::process::Command;
@@ -94,6 +95,8 @@ async fn generate_dispatcher() -> io::Result<()> {
         println!("cargo::rerun-if-changed=src/network_listener/linux/dispatcher");
 
         let status = Command::new("cargo")
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .args(["build", "--release"])
             .current_dir("./modules/linux-dispatcher")
             .status()
