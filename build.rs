@@ -102,7 +102,7 @@ async fn generate_dispatcher() -> io::Result<()> {
             return Err(io::Error::other("failed to run dispatcher build command"))
         }
 
-        let [no_prefix, musl] = ["", "x86_64-unknown-linux-musl/"].map(|infix|{
+        let [no_prefix, gnu] = ["", "x86_64-unknown-linux-gnu/"].map(|infix|{
             let path = format!("./modules/linux-dispatcher/target/{infix}release/linux-dispatcher");
             let path = PathBuf::from(path);
             path.exists().then(|| {
@@ -119,12 +119,12 @@ async fn generate_dispatcher() -> io::Result<()> {
             }
         };
 
-        let [no_prefix, musl] = [map_await(no_prefix).await, map_await(musl).await];
+        let [no_prefix, gnu] = [map_await(no_prefix).await, map_await(gnu).await];
 
         let flat_res = |opt: Option<_>| -> io::Result<_> {
             opt.transpose()?.transpose()
         };
-        let times = [flat_res(no_prefix)?, flat_res(musl)?];
+        let times = [flat_res(no_prefix)?, flat_res(gnu)?];
 
         let x = match times {
             [Some((t1, p1)), Some((t2, p2))] => (t1, p1).max((t2, p2)).1,
