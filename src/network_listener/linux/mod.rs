@@ -75,9 +75,9 @@ async fn check_network_status() -> Result<bool, dbus::Error> {
 
 pub async fn has_internet() -> bool {
     match check_network_status().await.ok() {
-        x @ Some(_) => x,
-        None => super::fallback_has_internet(),
-    }.unwrap_or(false)
+        Some(x) => x,
+        None => super::fallback_has_internet().await,
+    }
 }
 
 async fn ensure_dispatcher_place() -> io::Result<()> {
