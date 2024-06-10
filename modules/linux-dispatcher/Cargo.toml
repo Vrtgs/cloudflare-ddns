@@ -1,0 +1,18 @@
+[package]
+name = "linux-dispatcher"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+    opt-level = 'z'
+    strip = true
+    lto = "fat"
+    panic = "abort"
+    codegen-units = 1
+    incremental = false
+
+[profile.dev]
+    panic = "abort"
+
+
+[dependencies]

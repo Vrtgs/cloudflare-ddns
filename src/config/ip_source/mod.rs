@@ -351,8 +351,6 @@ impl Deserializable for Sources {
         struct ProcessIntermediate {
             steps: Vec<ProcessStep>,
         }
-        
-        
 
         let mut value = toml::from_str::<Map<String, Value>>(text)?;
 
@@ -386,7 +384,7 @@ impl Deserializable for Sources {
             driver_path,
             concurrent_resolve,
         )
-            .await
+        .await
     }
 }
 

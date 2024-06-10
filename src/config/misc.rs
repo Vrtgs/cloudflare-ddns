@@ -1,9 +1,9 @@
 use crate::config::time::Time;
+use crate::config::Deserializable;
 use anyhow::Result;
 use serde::Deserialize;
 use std::num::NonZeroU8;
 use std::time::Duration;
-use crate::config::Deserializable;
 
 #[derive(Debug, Eq, Ord, PartialOrd, PartialEq, Deserialize)]
 pub struct RefreshConfig {

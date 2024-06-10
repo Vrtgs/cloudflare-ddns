@@ -1,8 +1,8 @@
+use crate::config::Deserializable;
 use anyhow::Result;
 use reqwest::header::HeaderValue;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer};
-use crate::config::Deserializable;
 
 #[derive(Eq, Ord, PartialOrd, PartialEq, Debug)]
 pub(super) enum Auth {
@@ -24,8 +24,8 @@ macro_rules! invalid_header {
 
 impl<'de> Deserialize<'de> for Account {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
+    where
+        D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
         struct AccountInner {
@@ -64,8 +64,8 @@ pub struct Zone {
 
 impl<'de> Deserialize<'de> for Zone {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-        where
-            D: Deserializer<'de>,
+    where
+        D: Deserializer<'de>,
     {
         #[derive(Deserialize)]
         struct ZoneInner {

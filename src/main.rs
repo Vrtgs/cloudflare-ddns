@@ -15,13 +15,13 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::net::Ipv4Addr;
 use std::num::NonZeroU8;
+use std::panic::AssertUnwindSafe;
 use std::pin::pin;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::thread;
 use std::thread::Builder;
 use std::time::Duration;
-use tokio::runtime::Runtime;
 use tokio::sync::Semaphore;
 use tokio::try_join;
 
@@ -257,15 +257,12 @@ async fn real_main() -> Result<Action> {
 }
 
 #[cfg(feature = "trace")]
-fn make_runtime() -> Runtime {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build runtime")
+fn make_runtime() -> tokio::runtime::Handle {
+    (*util::GLOBAL_TOKIO_RUNTIME).clone()
 }
 
 #[cfg(not(feature = "trace"))]
-fn make_runtime() -> Runtime {
+fn make_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(util::num_cpus().get())
         .enable_all()
@@ -277,10 +274,11 @@ fn main() -> ExitCode {
     err::set_hook();
     #[cfg(feature = "trace")]
     console_subscriber::init();
-
+    
+    
     let mut runtime = make_runtime();
     loop {
-        let exit = std::panic::catch_unwind(|| runtime.block_on(real_main()));
+        let exit = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(real_main())));
 
         match exit {
             // Non-Recoverable

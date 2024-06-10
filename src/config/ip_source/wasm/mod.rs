@@ -1,11 +1,10 @@
 mod driver;
 
-use crate::util::new_skip_interval_after;
+use crate::util::{GLOBAL_TOKIO_RUNTIME, new_skip_interval_after};
 use anyhow::Result;
 pub use driver::WasmDriver;
 use std::path::Path;
 use std::sync::Once;
-use std::thread;
 use std::time::Duration;
 use tokio::sync::{OnceCell, RwLock};
 
@@ -18,30 +17,22 @@ pub(crate) fn __init_cleanup_routine() {
     #[cold]
     #[inline(never)]
     fn inner() {
-        // the runtime is saved and this **never** dies
-        thread::spawn(|| {
-            let main = async {
-                let mut interval = new_skip_interval_after(Duration::from_secs(3 * 60));
-                loop {
-                    interval.tick().await;
-                    if let Some(driver) = WASM_DRIVER.write().await.take() {
-                        let res = driver.close().await;
-                        if res.is_err() {
-                            tokio::task::spawn_blocking(|| {
-                                #[allow(clippy::panicking_unwrap)]
-                                // triggers err::hook
-                                std::panic::catch_unwind(|| res.unwrap())
-                            });
-                        }
+        // use the global runtime, as that one never exits
+        GLOBAL_TOKIO_RUNTIME.spawn(async {
+            let mut interval = new_skip_interval_after(Duration::from_secs(3 * 60));
+            loop {
+                interval.tick().await;
+                if let Some(driver) = WASM_DRIVER.write().await.take() {
+                    let res = driver.close().await;
+                    if res.is_err() {
+                        tokio::task::spawn_blocking(|| {
+                            #[allow(clippy::panicking_unwrap)]
+                            // triggers err::hook
+                            std::panic::catch_unwind(|| res.unwrap())
+                        });
                     }
                 }
-            };
-
-            tokio::runtime::Builder::new_current_thread()
-                .enable_time()
-                .build()
-                .unwrap()
-                .block_on(main)
+            }
         });
     }
 

@@ -1,5 +1,5 @@
 use crate::config::ip_source::Sources;
-use crate::config::{CfgInner, Config, deserialize_from_file};
+use crate::config::{deserialize_from_file, CfgInner, Config};
 use crate::updaters::{Updater, UpdatersManager};
 use crate::{non_zero, util, DdnsContext, UserMessages};
 use anyhow::Result;
@@ -218,7 +218,6 @@ pub async fn load() -> Result<(DdnsContext, UpdatersManager, ConfigStorage)> {
     let ctx = DdnsContext::new(Config(cfg));
     let user_messages = ctx.user_messages.clone();
     let mut updater_manager = UpdatersManager::new();
-
 
     let (updater, jh_entry) = updater_manager.add_updater("config-listener");
     let update_task = tokio::spawn(async move {

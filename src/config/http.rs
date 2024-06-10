@@ -1,8 +1,8 @@
 use crate::config::time::Time;
+use crate::config::Deserializable;
 use anyhow::Result;
 use serde::Deserialize;
 use std::time::Duration;
-use crate::config::Deserializable;
 
 #[derive(Debug, Eq, Ord, PartialOrd, PartialEq, Deserialize)]
 pub struct ClientConfig {

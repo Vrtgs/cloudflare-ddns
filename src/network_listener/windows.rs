@@ -99,7 +99,6 @@ thread_local! {
     }
 }
 
-#[must_use = "its useless to check if we have internet if you dont use it"]
 pub async fn has_internet() -> bool {
     fn inner() -> bool {
         NETWORK_MANGER

@@ -20,40 +20,30 @@ pub enum UpdaterError {
     Runloop(#[from] SchedulingError),
 }
 
-#[must_use = "its useless to check if we have internet if you dont use it"]
 pub async fn has_internet() -> bool {
     let sc = SCNetworkReachability::from(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
     sc.reachability().map_or(false, has_internet_from_flags)
 }
 
 fn has_internet_from_flags(flags: ReachabilityFlags) -> bool {
-    if !flags.contains(ReachabilityFlags::REACHABLE) {
-        return false;
-    }
-    if !flags.contains(ReachabilityFlags::CONNECTION_REQUIRED)
-        || ((flags.contains(ReachabilityFlags::CONNECTION_ON_DEMAND)
-            || flags.contains(ReachabilityFlags::CONNECTION_ON_TRAFFIC))
-            && !flags.contains(ReachabilityFlags::INTERVENTION_REQUIRED))
-    {
-        return true;
-    }
-    if flags == ReachabilityFlags::IS_WWAN {
-        return true;
-    }
-    false
+    flags.contains(ReachabilityFlags::REACHABLE)
+        && (!flags.contains(ReachabilityFlags::CONNECTION_REQUIRED)
+            || ((flags.contains(ReachabilityFlags::CONNECTION_ON_DEMAND)
+                || flags.contains(ReachabilityFlags::CONNECTION_ON_TRAFFIC))
+                && !flags.contains(ReachabilityFlags::INTERVENTION_REQUIRED))
+            || flags.contains(ReachabilityFlags::IS_WWAN))
 }
 
 fn listen<F: Fn() + Sync, S: Future>(
-    notify_callback: F,
+    _notify_callback: F,
     shutdown: S,
 ) -> Result<S::Output, UpdaterError> {
-    let mut sc = SCNetworkReachability::from(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
-    sc.set_callback(|flags| {
-        if has_internet_from_flags(flags) {
-            notify_callback()
-        }
-    })?;
-
+    // let mut sc = SCNetworkReachability::from(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
+    // sc.set_callback(|flags| {
+    //     if has_internet_from_flags(flags) {
+    //         notify_callback()
+    //     }
+    // })?;
     // unsafe { sc.schedule_with_runloop(&CFRunLoop::get_current(), kCFRunLoopDefaultMode)?; };
 
     Ok(TokioHandle::current().block_on(shutdown))
