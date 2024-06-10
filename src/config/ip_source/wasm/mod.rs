@@ -1,6 +1,6 @@
 mod driver;
 
-use crate::util::{GLOBAL_TOKIO_RUNTIME, new_skip_interval_after};
+use crate::util::{new_skip_interval_after, GLOBAL_TOKIO_RUNTIME};
 use anyhow::Result;
 pub use driver::WasmDriver;
 use std::path::Path;

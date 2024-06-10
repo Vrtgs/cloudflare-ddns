@@ -124,8 +124,6 @@ mod sys {
         };
     }
 
-    #[cold]
-    #[inline(never)]
     pub fn warn(warning: &str) {
         present_alert(
             "CloudFlare DDNS Warning",
@@ -134,8 +132,6 @@ mod sys {
         );
     }
 
-    #[cold]
-    #[inline(never)]
     pub fn err(err: &str) {
         present_alert(
             "CloudFlare DDNS Error",
@@ -143,6 +139,13 @@ mod sys {
             kCFUserNotificationStopAlertLevel,
         );
     }
+}
+
+#[cfg(target_os = "linux")]
+mod sys {
+    pub fn warn(_: &str) {}
+
+    pub fn err(_: &str) {}
 }
 
 #[cold]

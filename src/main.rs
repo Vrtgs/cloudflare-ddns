@@ -274,8 +274,7 @@ fn main() -> ExitCode {
     err::set_hook();
     #[cfg(feature = "trace")]
     console_subscriber::init();
-    
-    
+
     let mut runtime = make_runtime();
     loop {
         let exit = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(real_main())));

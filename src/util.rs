@@ -1,26 +1,25 @@
-use std::fmt::{Display, Formatter, Write};
-use std::{io, thread};
+use crate::abort;
+use once_cell::sync::Lazy;
 use std::convert::Infallible;
+use std::fmt::{Display, Formatter, Write};
 use std::net::{self, Ipv4Addr};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Duration;
-use once_cell::sync::Lazy;
+use std::{io, thread};
 use thiserror::Error;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
-use crate::abort;
-
 
 pub static GLOBAL_TOKIO_RUNTIME: Lazy<TokioHandle> = Lazy::new(|| {
     macro_rules! rt_abort {
-        () => {
-            { |e| { abort!("failed to initialize the global tokio runtime due to {e}") } }
-        };
+        () => {{
+            |e| abort!("failed to initialize the global tokio runtime due to {e}")
+        }};
     }
-    
+
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -30,7 +29,7 @@ pub static GLOBAL_TOKIO_RUNTIME: Lazy<TokioHandle> = Lazy::new(|| {
     thread::Builder::new()
         .spawn(move || runtime.block_on(std::future::pending::<Infallible>()))
         .unwrap_or_else(rt_abort!());
-    
+
     handle
 });
 

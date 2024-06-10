@@ -96,13 +96,14 @@ async fn generate_dispatcher() -> io::Result<()> {
         let status = Command::new("cargo")
             .args(["build", "--release"])
             .current_dir("./modules/linux-dispatcher")
-            .status().await?;
+            .status()
+            .await?;
 
         if !status.success() {
-            return Err(io::Error::other("failed to run dispatcher build command"))
+            return Err(io::Error::other("failed to run dispatcher build command"));
         }
 
-        let [no_prefix, gnu] = ["", "x86_64-unknown-linux-gnu/"].map(|infix|{
+        let [no_prefix, gnu] = ["", "x86_64-unknown-linux-gnu/"].map(|infix| {
             let path = format!("./modules/linux-dispatcher/target/{infix}release/linux-dispatcher");
             let path = PathBuf::from(path);
             path.exists().then(|| {
@@ -121,9 +122,7 @@ async fn generate_dispatcher() -> io::Result<()> {
 
         let [no_prefix, gnu] = [map_await(no_prefix).await, map_await(gnu).await];
 
-        let flat_res = |opt: Option<_>| -> io::Result<_> {
-            opt.transpose()?.transpose()
-        };
+        let flat_res = |opt: Option<_>| -> io::Result<_> { opt.transpose()?.transpose() };
         let times = [flat_res(no_prefix)?, flat_res(gnu)?];
 
         let x = match times {
@@ -133,14 +132,10 @@ async fn generate_dispatcher() -> io::Result<()> {
             [None, None] => {
                 println!("cargo::warning=Couldn't find daemon dispatcher");
                 panic!("Couldn't find dispatcher")
-            },
+            }
         };
 
-
-        tokio::fs::rename(
-            x,
-            "./src/network_listener/linux/dispatcher"
-        ).await?;
+        tokio::fs::rename(x, "./src/network_listener/linux/dispatcher").await?;
     }
 
     Ok(())
@@ -155,5 +150,6 @@ async fn main() {
         make_default_sources_toml(),
         make_default_sources_rs(),
         generate_dispatcher()
-    ).unwrap();
+    )
+    .unwrap();
 }

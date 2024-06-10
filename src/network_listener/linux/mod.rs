@@ -1,5 +1,5 @@
-use crate::abort_unreachable;
 use crate::updaters::Updater;
+use crate::util::GLOBAL_TOKIO_RUNTIME;
 use dbus::nonblock::{Proxy, SyncConnection};
 use futures::{StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
@@ -11,7 +11,6 @@ use std::time::Duration;
 use tokio::net::UnixListener;
 use tokio::task::JoinHandle;
 use tokio::{fs, io};
-use crate::util::GLOBAL_TOKIO_RUNTIME;
 
 async fn touch(p: impl AsRef<Path>) -> io::Result<()> {
     async fn inner(p: &Path) -> io::Result<()> {
@@ -36,11 +35,18 @@ impl<T> ArcExt<T> for Arc<T> {
     }
 }
 
-async fn check_network_status() -> Result<bool, dbus::Error> {
+#[derive(Debug, thiserror::Error)]
+enum DbusError {
+    #[error(transparent)]
+    Init(#[from] &'static dbus::Error),
+    #[error(transparent)]
+    Owned(#[from] dbus::Error),
+}
+
+async fn check_network_status() -> Result<bool, DbusError> {
     static NETWORK_MANAGER: Lazy<Result<&SyncConnection, dbus::Error>> = Lazy::new(|| {
-        let (resource, conn) =
-            dbus_tokio::connection::new_session_sync()?;
-        
+        let (resource, conn) = dbus_tokio::connection::new_session_sync()?;
+
         GLOBAL_TOKIO_RUNTIME.spawn(resource);
 
         Ok(Arc::leak(conn))
@@ -51,7 +57,7 @@ async fn check_network_status() -> Result<bool, dbus::Error> {
         "org.freedesktop.NetworkManager",
         "/org/freedesktop/NetworkManager",
         Duration::from_secs(3),
-        NETWORK_MANAGER?,
+        NETWORK_MANAGER.as_ref().copied()?,
     );
 
     // Call the Get method on the org.freedesktop.DBus.Properties interface
@@ -80,7 +86,7 @@ pub async fn has_internet() -> bool {
     }
 }
 
-async fn ensure_dispatcher_place() -> io::Result<()> {
+async fn place_dispatcher() -> io::Result<()> {
     let locations = include!("./dispatcher-locations")
         .map(Path::new)
         .map(|loc| loc.join(include_str!("./dispatcher-name")));
@@ -95,7 +101,7 @@ async fn ensure_dispatcher_place() -> io::Result<()> {
     let buffer = futures
         .len()
         .min(thread::available_parallelism().map_or(1, NonZeroUsize::get));
-    
+
     futures::stream::iter(futures)
         .buffer_unordered(buffer)
         .try_collect()
@@ -104,6 +110,8 @@ async fn ensure_dispatcher_place() -> io::Result<()> {
 
 async fn listen(updater: &Updater) -> io::Result<()> {
     touch(include_str!("./socket-path")).await?;
+    place_dispatcher().await?;
+
     let listener = UnixListener::bind(include_str!("./socket-path"))?;
     loop {
         let _ = listener.accept().await?;
