@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter, Write};
-use std::{env, io};
 use std::process::Stdio;
+use std::{env, io};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::process::Command;
@@ -90,12 +90,10 @@ async fn make_default_sources_rs() -> io::Result<()> {
 async fn generate_dispatcher() -> io::Result<()> {
     macro_rules! get_var {
         ($lit: literal) => {
-            env::var($lit).map_err(|e| {
-                io::Error::other(format!(concat!($lit, " {err}"), err=e))
-            })
+            env::var($lit).map_err(|e| io::Error::other(format!(concat!($lit, " {err}"), err = e)))
         };
     }
-    
+
     if get_var!("CARGO_CFG_TARGET_OS")? == "linux" {
         println!("cargo::rerun-if-changed=modules/linux-dispatcher");
         println!("cargo::rerun-if-changed=src/network_listener/linux/dispatcher");
@@ -122,7 +120,7 @@ async fn generate_dispatcher() -> io::Result<()> {
                 .then_some(path)
                 .ok_or_else(|| io::Error::other("unable to find dispatcher binary"))?
         };
-        
+
         tokio::fs::rename(target_path, "./src/network_listener/linux/dispatcher").await?;
     }
 

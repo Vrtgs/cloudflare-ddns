@@ -143,9 +143,13 @@ mod sys {
 
 #[cfg(target_os = "linux")]
 mod sys {
-    pub fn warn(_: &str) {}
+    pub fn warn(_: &str) {
+        todo!()
+    }
 
-    pub fn err(_: &str) {}
+    pub fn err(_: &str) {
+        todo!()
+    }
 }
 
 #[cold]
