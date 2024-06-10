@@ -1,2 +1,6 @@
 [build]
 rustflags = ["-Z", "location-detail=none"]
+
+[unstable]
+build-std = ["std", "alloc", "core", "panic_abort"]
+build-std-features = ["panic_immediate_abort"]
