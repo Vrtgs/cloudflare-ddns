@@ -116,7 +116,6 @@ async fn generate_dispatcher() -> io::Result<()> {
         let target = get_var!("TARGET")?;
         let target = target.trim();
         spawn!("rustup" <== ["component", "add", "rust-src"]).await?;
-        spawn!("rustup" <== ["toolchain", "add", "nightly"]).await?;
         spawn!("cargo" <== ["+nightly", "build", "--release", "--target", target]).await?;
 
         let target_path = {
