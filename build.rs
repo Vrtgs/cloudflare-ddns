@@ -3,6 +3,7 @@ use std::process::Stdio;
 use std::{env, io};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::process::Command;
 use tokio::try_join;
 
 macro_rules! plaintext_sources {
@@ -96,27 +97,20 @@ async fn generate_dispatcher() -> io::Result<()> {
     if get_var!("CARGO_CFG_TARGET_OS")? == "linux" {
         println!("cargo::rerun-if-changed=modules/linux-dispatcher");
         println!("cargo::rerun-if-changed=src/network_listener/linux/dispatcher");
-        
-        macro_rules! spawn {
-            ($program_name: literal <== [$($arg:expr),*]) => {
-                async move {
-                    ::tokio::process::Command::new($program_name)
-                        .args([$($arg),*])
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::inherit())
-                        .current_dir("./modules/linux-dispatcher")
-                        .status().await?
-                        .success()
-                        .then_some(())
-                        .ok_or_else(|| io::Error::other("failed to run dispatcher build command"))
-                }
-            };
-        }
 
         let target = get_var!("TARGET")?;
         let target = target.trim();
-        spawn!("rustup" <== ["component", "add", "rust-src"]).await?;
-        spawn!("cargo" <== ["+nightly", "build", "--release", "--target", target]).await?;
+        let status = Command::new("cargo")
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .args(["+nightly", "build", "--release", "--target", target])
+            .current_dir("./modules/linux-dispatcher")
+            .status()
+            .await?;
+
+        if !status.success() {
+            return Err(io::Error::other("failed to run dispatcher build command"));
+        }
 
         let target_path = {
             let path =
