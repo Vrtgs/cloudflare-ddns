@@ -94,6 +94,7 @@ async fn generate_dispatcher() -> io::Result<()> {
         };
     }
 
+    println!("cargo::rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     if get_var!("CARGO_CFG_TARGET_OS")? == "linux" {
         println!("cargo::rerun-if-changed=modules/linux-dispatcher");
         println!("cargo::rerun-if-changed=src/network_listener/linux/dispatcher");
@@ -103,7 +104,7 @@ async fn generate_dispatcher() -> io::Result<()> {
         let status = Command::new("cargo")
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
-            .args(["+nightly", "build", "--release", "--target", target])
+            .args(["build", "--release", "--target", target])
             .current_dir("./modules/linux-dispatcher")
             .status()
             .await?;
