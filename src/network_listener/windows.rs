@@ -174,7 +174,7 @@ struct UpdaterInner<'a> {
 }
 
 #[allow(non_snake_case)]
-impl<'a> INetworkEvents_Impl for UpdaterInner<'a> {
+impl<'a> INetworkEvents_Impl for UpdaterInner_Impl<'a> {
     fn NetworkAdded(&self, _: &GUID) -> WinResult<()> {
         Ok(())
     }

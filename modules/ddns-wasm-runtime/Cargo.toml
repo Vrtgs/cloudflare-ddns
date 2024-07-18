@@ -1,0 +1,55 @@
+[package]
+name = "ddns-wasm-runtime"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[profile.release]
+    incremental = false
+    opt-level = 3
+    strip = true
+    lto = "fat"
+    panic = "unwind"
+    codegen-units = 1
+
+[dependencies]
+tokio = { version = "1.38.0", features = ["full"] }
+uuid = { version = "1.8.0", features = ["v4"] }
+anyhow = { version = "1.0.86", features = ["backtrace"] }
+bincode = { version = "2.0.0-rc.3", git = 'https://github.com/bincode-org/bincode.git' }
+parking_lot = "0.12.3"
+once_cell = "1.19.0"
+itoa = "1.0.11"
+mimalloc = { version = "0.1.43", default-features = false }
+tempfile = "3.10.1"
+cfg-if = "1.0.0"
+
+[target.'cfg(unix)'.dependencies]
+tempfile = "3.10.1"
+
+
+
+[dependencies.interprocess]
+version = "2.2.0"
+features = ["tokio"]
+
+[dependencies.wiggle]
+version = "22.0.0"
+
+[dependencies.wasmtime]
+version = "22.0.0"
+default-features = false
+features = [
+    "async",
+    "parallel-compilation",
+    "cranelift",
+    "pooling-allocator",
+    "runtime",
+    "component-model",
+    "gc"
+]
+
+[dependencies.wasi-common]
+version = "22.0.0"
+features = ["tokio"]
