@@ -60,7 +60,7 @@ async fn make_default_sources_rs() -> io::Result<()> {
     }
 
     macro_rules! vec {
-        ($($args:tt)*) => {
+        [$($args:tt)*] => {
             VecDebug(::std::vec![$($args)*])
         };
     }

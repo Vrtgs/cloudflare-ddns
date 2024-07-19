@@ -1,11 +1,11 @@
-use std::convert::Infallible;
-use std::io;
-use crate::{abort, err};
+use crate::err;
 
 #[cfg(target_os = "linux")]
 fn ensure_root() {
     use std::os::unix::process::CommandExt;
     use nix::unistd::Uid;
+    use std::convert::Infallible;
+    use std::io;
     
     if !Uid::effective().is_root() {
         fn elevate() -> io::Result<Infallible> {
@@ -16,7 +16,7 @@ fn ensure_root() {
             Err(err)
         }
         
-        elevate().unwrap_or_else(|e| abort!("{e}"));
+        elevate().unwrap_or_else(|e| crate::abort!("{e}"));
     }
 }
 
