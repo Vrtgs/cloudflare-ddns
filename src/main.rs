@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::network_listener::has_internet;
 use crate::retrying_client::RetryingClient;
 use crate::updaters::{UpdaterEvent, UpdaterExitStatus};
-use crate::util::{new_skip_interval, EscapeExt};
+use crate::util::{EscapeExt, new_skip_interval};
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
 use serde::Deserialize;
@@ -32,6 +32,7 @@ mod network_listener;
 mod retrying_client;
 mod updaters;
 mod util;
+mod pre;
 
 struct DdnsContext {
     client: RetryingClient,
@@ -271,7 +272,7 @@ fn make_runtime() -> tokio::runtime::Runtime {
 }
 
 fn main() -> ExitCode {
-    err::set_hook();
+    pre::pre_run();
     #[cfg(feature = "trace")]
     console_subscriber::init();
 

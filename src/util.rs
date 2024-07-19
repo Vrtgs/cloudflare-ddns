@@ -3,7 +3,7 @@ use once_cell::sync::Lazy;
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter, Write};
 use std::net::{self, Ipv4Addr};
-use std::num::NonZeroUsize;
+use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::OnceLock;
@@ -35,24 +35,24 @@ pub static GLOBAL_TOKIO_RUNTIME: Lazy<TokioHandle> = Lazy::new(|| {
 
 #[macro_export]
 macro_rules! non_zero {
-    ($lit: literal) => {{
-        const _: () = {
-            if $lit == 0 {
-                panic!("non zero literal can't be 0")
+    ($x: expr) => {{
+        const {
+            match ::std::num::NonZero::new($x) {
+                Some(x) => x,
+                None => panic!("non zero can't be 0")
             }
-        };
-        $lit.try_into().unwrap()
+        }
     }};
 }
 
 #[inline]
-pub fn num_cpus() -> NonZeroUsize {
-    static NUM_CPUS: OnceLock<NonZeroUsize> = OnceLock::new();
+pub fn num_cpus() -> NonZero<usize> {
+    static NUM_CPUS: OnceLock<NonZero<usize>> = OnceLock::new();
 
     #[cold]
     #[inline(never)]
-    fn num_cpus_uncached() -> NonZeroUsize {
-        std::thread::available_parallelism().unwrap_or(non_zero!(1))
+    fn num_cpus_uncached() -> NonZero<usize> {
+        thread::available_parallelism().unwrap_or(non_zero!(1))
     }
 
     *NUM_CPUS.get_or_init(num_cpus_uncached)

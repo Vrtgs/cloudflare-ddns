@@ -36,6 +36,7 @@ async fn make_default_sources_toml() -> io::Result<()> {
     tokio::fs::write("./default/gen/sources.toml", data.trim()).await
 }
 
+
 async fn make_default_sources_rs() -> io::Result<()> {
     let mut file = BufWriter::new(File::create("./default/gen/sources.array").await?);
 
@@ -101,17 +102,17 @@ async fn generate_dispatcher() -> io::Result<()> {
 
         let target = get_var!("TARGET")?;
         let target = target.trim();
-        let status = Command::new("cargo")
+        
+        Command::new("cargo")
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .args(["build", "--release", "--target", target])
             .current_dir("./modules/linux-dispatcher")
             .status()
-            .await?;
-
-        if !status.success() {
-            return Err(io::Error::other("failed to run dispatcher build command"));
-        }
+            .await?
+            .success()
+            .then_some(())
+            .ok_or_else(|| io::Error::other("failed to run dispatcher build command"))?;
 
         let target_path = {
             let path =

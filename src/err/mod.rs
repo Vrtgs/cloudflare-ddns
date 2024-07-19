@@ -55,9 +55,9 @@ mod sys {
     use std::ffi::OsStr;
     use std::num::NonZeroU16;
     use std::os::windows::ffi::OsStrExt;
-    use windows::core::{w as wide, PCWSTR};
+    use windows::core::{PCWSTR, w as wide};
     use windows::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE,
+        MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE, MessageBoxW,
     };
 
     fn encode_wide(str: &OsStr) -> Vec<u16> {
@@ -90,7 +90,7 @@ mod sys {
 
     pub fn err(err: &str) {
         // # Safety: caption was made by the wide macro which is valid
-        unsafe { present_alert(wide!("CloudFlare DDNS Warning"), err.as_ref(), MB_ICONERROR) }
+        unsafe { present_alert(wide!("CloudFlare DDNS Error"), err.as_ref(), MB_ICONERROR) }
     }
 }
 
@@ -100,8 +100,8 @@ mod sys {
     use core_foundation::string::CFString;
     use core_foundation_sys::base::CFOptionFlags;
     use core_foundation_sys::user_notification::{
-        kCFUserNotificationCautionAlertLevel, kCFUserNotificationStopAlertLevel,
-        CFUserNotificationDisplayAlert,
+        CFUserNotificationDisplayAlert, kCFUserNotificationCautionAlertLevel,
+        kCFUserNotificationStopAlertLevel,
     };
 
     fn present_alert(title: &str, message: &str, flags: CFOptionFlags) {
@@ -143,12 +143,164 @@ mod sys {
 
 #[cfg(target_os = "linux")]
 mod sys {
-    pub fn warn(_: &str) {
-        todo!()
+    // use gtk4::prelude::*;
+    // use gtk4::{Application, ApplicationWindow, ButtonsType, MessageDialog, MessageType};
+    use log::{Log, Metadata, Record};
+    use simple_logger::SimpleLogger;
+    use std::ops::Deref;
+    use std::sync::OnceLock;
+    use systemd_journal_logger::JournalLog;
+
+    enum OneOrTwo<T> {
+        One(T),
+        Two([T; 2]),
     }
 
-    pub fn err(_: &str) {
-        todo!()
+    struct Loggers(OneOrTwo<Box<dyn Log>>);
+
+    impl Loggers {
+        fn iter(&self) -> impl Iterator<Item = &dyn Log> {
+            match &self.0 {
+                OneOrTwo::One(one) => std::slice::from_ref(one),
+                OneOrTwo::Two(two) => two,
+            }
+            .iter()
+            .map(Deref::deref)
+        }
+    }
+
+    impl Default for Loggers {
+        fn default() -> Self {
+            let simple = Box::new(SimpleLogger::new()) as Box<dyn Log>;
+            let system_d = JournalLog::new().map(Box::new);
+            let stuff = match system_d {
+                Ok(system_d) => OneOrTwo::Two([simple, system_d]),
+                Err(_) => OneOrTwo::One(simple),
+            };
+            Self(stuff)
+        }
+    }
+
+    impl Log for Loggers {
+        fn enabled(&self, metadata: &Metadata) -> bool {
+            self.iter().any(|logger| logger.enabled(metadata))
+        }
+
+        fn log(&self, record: &Record) {
+            self.iter().for_each(|logger| logger.log(record))
+        }
+
+        fn flush(&self) {
+            self.iter().for_each(Log::flush)
+        }
+    }
+
+    static LOGGERS: OnceLock<Loggers> = OnceLock::new();
+
+    static GTK_AVAILABLE: OnceLock<ErrorBackEnd> = OnceLock::new();
+
+
+    // type GtkMessage = (Box<dyn FnOnce() + Send>, OneShotSender<()>);
+    #[derive(Clone)]
+    enum ErrorBackEnd {
+        // Gtk(std::sync::mpsc::Sender<GtkMessage>),
+        Logger,
+    }
+
+    fn back_end() -> ErrorBackEnd {
+        GTK_AVAILABLE
+            .get_or_init(|| {
+                // let (send, rcv) = std::sync::mpsc::sync_channel(1);
+                // let _ = thread::Builder::new().spawn(move || {
+                //     if gtk4::init().is_err() {
+                //         let _ = send.send(Err(()));
+                //         return;
+                //     }
+                //     let (task_send, rcv) = std::sync::mpsc::channel::<GtkMessage>();
+                //     let _ = send.send(Ok(task_send));
+                // 
+                //     for (msg, cb) in rcv {
+                //         msg();
+                //         let _ = cb.send(());
+                //     }
+                // });
+                // 
+                // match rcv.recv() {
+                //     Ok(Ok(sender)) => ErrorBackEnd::Gtk(sender),
+                //     _ => {
+                //         log::set_logger(LOGGERS.get_or_init(Loggers::default))
+                //             .expect("unable to set any form of logging");
+                //         ErrorBackEnd::Logger
+                //     }
+                // }
+                
+                log::set_logger(LOGGERS.get_or_init(Loggers::default))
+                    .expect("unable to set any form of logging");
+                ErrorBackEnd::Logger
+            })
+            .clone()
+    }
+
+    // fn gtk_present(title: String, msg: String, message_type: MessageType) {
+    //     let app = Application::builder()
+    //         .application_id("xyz.vrtgs.cloudflare-ddns.errors")
+    //         .build();
+    // 
+    //     app.connect_activate(move |app| {
+    //         let window = ApplicationWindow::builder()
+    //             .application(app)
+    //             .title(&title)
+    //             .default_width(0)
+    //             .default_height(0)
+    //             .build();
+    // 
+    //         let dialog = MessageDialog::builder()
+    //             .transient_for(&window)
+    //             .modal(true)
+    //             .buttons(ButtonsType::Close)
+    //             .message_type(message_type)
+    //             .text(&title)
+    //             .secondary_text(&msg)
+    //             .build();
+    // 
+    //         let app = app.clone();
+    //         dialog.connect_response(move |dialog, _| {
+    //             dialog.close();
+    //             window.close();
+    //             app.quit();
+    //         });
+    // 
+    //         dialog.show();
+    //     });
+    // 
+    //     app.run();
+    // }
+
+    fn present_alert(title: &str, msg: &str, message_type: log::Level) {
+        match back_end() {
+            // ErrorBackEnd::Gtk(chan) => {
+            //     let (title, msg) = (title.to_owned(), msg.to_owned());
+            //     let (send, wait) = std::sync::mpsc::sync_channel(1);
+            //     let _ = chan.send((
+            //         Box::new(move || gtk_present(title, msg, message_type)),
+            //         send,
+            //     ));
+            //     let _ = wait.recv();
+            // }
+            ErrorBackEnd::Logger => match message_type {
+                log::Level::Warn => log::warn!("[{title}]: {msg}"),
+                log::Level::Error => log::error!("[{title}]: {msg}"),
+                _ => unreachable!()
+            },
+        }
+    }
+
+    pub fn warn(warning: &str) {
+        present_alert("CloudFlare DDNS Warning", warning, log::Level::Warn);
+    }
+
+    pub fn err(err: &str) {
+        present_alert("CloudFlare DDNS Error", err, log::Level::Error);
     }
 }
 
@@ -186,7 +338,7 @@ fn hook(info: &PanicInfo) {
         ([$_:expr] |> $default: expr) => { $default };
     }
 
-    let msg = try_cast!([info.payload()] String,&str,Box<str>,Rc<str>,Arc<str>,Cow<str> |> "dyn Any + Send + 'static");
+    let msg = try_cast!([info.payload()] String,&str,Box<str>,Rc<str>,Arc<str>,Cow<str> |> "Box<dyn Any>");
 
     dbg_println!("We panicked at: {msg}");
 

@@ -1,27 +1,22 @@
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::num::NonZero;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::Path;
 use crate::updaters::Updater;
 use crate::util::GLOBAL_TOKIO_RUNTIME;
 use dbus::nonblock::{Proxy, SyncConnection};
-use futures::{StreamExt, TryStreamExt};
 use once_cell::sync::Lazy;
-use std::num::NonZeroUsize;
-use std::path::Path;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use futures::{StreamExt, TryStreamExt};
 use tokio::net::UnixListener;
+use tokio::sync::OnceCell as TokioOnceCell;
 use tokio::task::JoinHandle;
-use tokio::{fs, io};
-
-async fn touch(p: impl AsRef<Path>) -> io::Result<()> {
-    async fn inner(p: &Path) -> io::Result<()> {
-        if let Some(parent) = Path::new(p).parent() {
-            fs::create_dir_all(parent).await?
-        }
-        fs::File::create(p).await.map(drop)
-    }
-
-    inner(p.as_ref()).await
-}
+use anyhow::Result;
+use tempfile::TempPath;
+use crate::util;
 
 trait ArcExt<T> {
     fn leak(this: Self) -> &'static T;
@@ -40,7 +35,7 @@ enum DbusError {
     #[error(transparent)]
     Init(#[from] &'static dbus::Error),
     #[error(transparent)]
-    Owned(#[from] dbus::Error),
+    Connection(#[from] dbus::Error),
 }
 
 async fn check_network_status() -> Result<bool, DbusError> {
@@ -80,27 +75,44 @@ async fn check_network_status() -> Result<bool, DbusError> {
 }
 
 pub async fn has_internet() -> bool {
-    match check_network_status().await.ok() {
-        Some(x) => x,
-        None => super::fallback_has_internet().await,
+    static SUPPORT_NETWORK_MANAGER: TokioOnceCell<bool> = TokioOnceCell::const_new();
+
+    match SUPPORT_NETWORK_MANAGER.get_or_init(|| async { check_network_status().await.is_ok() }).await {
+        true => match check_network_status().await {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("Unexpected error checking internet {e} switching to fallback");
+                super::fallback_has_internet().await
+            }
+        }
+        false => super::fallback_has_internet().await
     }
 }
 
-async fn place_dispatcher() -> io::Result<()> {
+async fn place_dispatcher() -> Result<()> {
     let locations = include!("./dispatcher-locations")
         .map(Path::new)
         .map(|loc| loc.join(include_str!("./dispatcher-name")));
 
     let futures = locations.map(|location| async move {
-        if !location.exists() && location.parent().map_or(Ok(false), Path::try_exists)? {
-            tokio::fs::write(location, include_bytes!("./dispatcher")).await?;
-        }
-        Ok(())
+        tokio::task::spawn_blocking(move || {
+            if let Some(parent) = location.parent() {
+                if !location.try_exists()? && parent.try_exists()? {
+                    OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o777)
+                        .open(location)?.write_all(include_bytes!("./dispatcher"))?;
+                }
+            }
+            Ok(())
+        }).await?
     });
 
     let buffer = futures
         .len()
-        .min(thread::available_parallelism().map_or(1, NonZeroUsize::get));
+        .min(thread::available_parallelism().map_or(1, NonZero::get));
 
     futures::stream::iter(futures)
         .buffer_unordered(buffer)
@@ -108,11 +120,16 @@ async fn place_dispatcher() -> io::Result<()> {
         .await
 }
 
-async fn listen(updater: &Updater) -> io::Result<()> {
-    touch(include_str!("./socket-path")).await?;
+async fn listen(updater: &Updater) -> Result<()> {
     place_dispatcher().await?;
 
-    let listener = UnixListener::bind(include_str!("./socket-path"))?;
+    const SOCK: &str = include_str!("./socket-path");
+
+    if util::try_exists(SOCK).await? {
+        tokio::fs::remove_file(SOCK).await?;
+    }
+    let sock = TempPath::from_path(SOCK);
+    let listener = UnixListener::bind(&sock)?;
     loop {
         let _ = listener.accept().await?;
         if updater.update().is_err() {
@@ -123,7 +140,10 @@ async fn listen(updater: &Updater) -> io::Result<()> {
 
 pub fn subscribe(updater: Updater) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let res = listen(&updater).await;
+        let res = tokio::select! {
+            res = listen(&updater) => res,
+            _ = updater.wait_shutdown() => Ok(())
+        };
         updater.exit(res)
     })
 }
