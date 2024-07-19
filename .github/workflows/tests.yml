@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -17,6 +18,9 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+      - name: Install dependencies on Ubuntu
+        if: runner.os == 'Linux'
+        run: sudo apt install libdbus-1-dev pkg-config
       - name: cargo test
         uses: actions-rs/cargo@v1
         with:

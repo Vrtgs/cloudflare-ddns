@@ -33,6 +33,9 @@ jobs:
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Install dependencies on Ubuntu
+      - if: runner.os == 'Linux'
+      - run: sudo apt install libdbus-1-dev pkg-config
       - uses: actions/checkout@v4
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
