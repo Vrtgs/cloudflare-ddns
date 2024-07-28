@@ -26,7 +26,7 @@ default = []
 trace = ["tokio/tracing", "dep:console-subscriber"]
 
 [dependencies]
-tokio                 = { version = "1.38.1", features = ["full"] }
+tokio                 = { version = "1.39.1", features = ["full"] }
 futures               = { version = "0.3.30"}
 serde                 = { version = "1.0.204", features = ["derive", "rc"] }
 simd-json             = { version = "0.13.10", features = ["ahash"] }
@@ -109,4 +109,4 @@ core-foundation-sys  = "0.8.6"
 system-configuration = "0.6.0"
 
 [build-dependencies]
-tokio = { version = "1.38.1", features = ["rt", "macros", "fs", "io-util", "process"] }
+tokio = { version = "1.39.1", features = ["rt", "macros", "fs", "io-util", "process"] }
