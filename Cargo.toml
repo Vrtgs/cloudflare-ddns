@@ -104,7 +104,7 @@ features = [
 
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-foundation      = "0.9.4"
+core-foundation      = "0.10.0"
 core-foundation-sys  = "0.8.6"
 system-configuration = "0.6.0"
 
