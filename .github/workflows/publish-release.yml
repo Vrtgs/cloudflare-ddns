@@ -37,31 +37,20 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt install libdbus-1-dev pkg-config upx
 
-      - name: Install UPX on macOS
-        if: runner.os == 'macOS'
-        run: |
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          brew install upx
-
-      - name: Install UPX on Windows
-        if: runner.os == 'Windows'
-        run: |
-          Set-ExecutionPolicy Bypass -Scope Process -Force; 
-          [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; 
-          iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-          choco install upx
+#      needs post build script to pack the binary
+#      - name: Install UPX on macOS
+#        if: runner.os == 'macOS'
+#        run: brew install upx
+#
+#      - name: Install UPX on Windows
+#        if: runner.os == 'Windows'
+#        run: choco install upx
 
 
       - uses: actions/checkout@v4
-      - name: Build and compress binary
-        run: |
-          cargo build --release --target ${{ matrix.target }}
-          upx --best target/${{ matrix.target }}/release/cloudflare-ddns
-
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: cloudflare-ddns
           target: ${{ matrix.target }}
-          tar: unix
-          zip: windows
+          checksum: sha512
           token: ${{ secrets.GITHUB_TOKEN }}
