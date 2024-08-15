@@ -25,6 +25,7 @@ edition = "2021"
 resolver = "2"
 members = [
     ".",
+    "modules/linux-dispatcher",
     "modules/ip_macro",
 ]
 

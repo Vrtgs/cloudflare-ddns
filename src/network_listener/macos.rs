@@ -37,36 +37,7 @@ fn has_internet_from_flags(flags: ReachabilityFlags) -> bool {
 
 pub fn subscribe(updater: Updater) -> JoinHandle<()> {
     tokio::task::spawn(async move {
-        let local_notify = Notify::new();
-        let callback = || {
-            dbg_println!("Network Listener: got network update!");
-            if updater.update().is_err() {
-                local_notify.notify_waiters();
-            }
-        };
-        
-        let listen_loop = async move {
-            let mut timer = new_skip_interval_after(Duration::from_secs(30));
-            let mut last: bool = has_internet().await;
-            loop {
-                timer.tick().await;
-                let new = has_internet().await;
-                if last != new { 
-                    last = new;
-                    callback()
-                }
-            }
-        };
-        
-        tokio::select! {
-            never = listen_loop => {
-                let never: Infallible = never;
-                match never {}
-            },
-            _ = local_notify.notified()  => (),
-            _ = updater.wait_shutdown() => ()
-        }
-
-        updater.exit(Ok::<_, Infallible>(()))
+        let res = super::fallback_listen(&updater);
+        updater.exit(res)
     })
 }

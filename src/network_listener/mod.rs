@@ -3,13 +3,16 @@
 #[cfg_attr(target_os = "macos", path = "macos.rs")]
 mod sys_common;
 
-use crate::updaters::UpdatersManager;
+use crate::updaters::{Updater, UpdatersManager};
 use std::convert::Infallible;
 use std::net::IpAddr;
 use std::time::Duration;
 use tokio::net::TcpStream;
+use tokio::sync::Notify;
 use tokio::try_join;
 use ip_macro::ip;
+use crate::dbg_println;
+use crate::util::new_skip_interval_after;
 
 #[must_use = "its useless to check if we have internet if you dont use it"]
 #[inline(always)]
@@ -50,6 +53,41 @@ async fn fallback_has_internet() -> bool {
         [google_v6, ip!("2001:4860:4860::8888")]
         [google_alt_v6, ip!("2001:4860:4860::8844")]
     ).await
+}
+
+#[allow(dead_code)]
+async fn fallback_listen(updater: &Updater) -> Result<(), Infallible> {
+    let local_notify = Notify::new();
+    let callback = || {
+        dbg_println!("Network Listener: got network update!");
+        if updater.update().is_err() {
+            local_notify.notify_waiters();
+        }
+    };
+
+    let listen_loop = async move {
+        let mut timer = new_skip_interval_after(Duration::from_secs(30));
+        let mut last: bool = has_internet().await;
+        loop {
+            timer.tick().await;
+            let new = has_internet().await;
+            if last != new {
+                last = new;
+                callback()
+            }
+        }
+    };
+
+    tokio::select! {
+        never = listen_loop => {
+            let never: Infallible = never;
+            match never {}
+        },
+        _ = local_notify.notified()  => (),
+        _ = updater.wait_shutdown() => ()
+    }
+    
+    Ok(())
 }
 
 pub fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<(), Infallible> {

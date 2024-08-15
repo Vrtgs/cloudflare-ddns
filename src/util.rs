@@ -44,6 +44,11 @@ pub async fn try_exists(path: impl AsRef<Path>) -> io::Result<bool> {
     inner(path.as_ref().to_owned()).await
 }
 
+
+pub fn new_skip_interval_after(period: Duration) -> Interval {
+    new_skip_interval_at(Instant::now() + period, period)
+}
+
 pub fn new_skip_interval(period: Duration) -> Interval {
     new_skip_interval_at(Instant::now(), period)
 }
