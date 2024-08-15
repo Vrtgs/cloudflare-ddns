@@ -120,7 +120,7 @@ async fn generate_dispatcher() -> io::Result<()> {
 
             eprintln!(
                 "{:?}",
-                std::fs::read_dir(format!("./modules/linux-dispatcher/target/{target}"))
+                std::fs::read_dir("./modules/linux-dispatcher/target")
                     .and_then(|x| x.collect::<Result<Vec<_>, _>>())
             );
 
