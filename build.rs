@@ -115,7 +115,7 @@ async fn generate_dispatcher() -> io::Result<()> {
 
         let target_path = {
             let path =
-                format!("./modules/linux-dispatcher/target/{target}/release/linux-dispatcher");
+                format!("./modules/linux-dispatcher/target/{target}/linux-dispatcher/linux-dispatcher");
             // try to UPX
             Command::new("upx").args(["--best", &*path]);
             tokio::fs::try_exists(&path)

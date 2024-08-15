@@ -1,15 +1,10 @@
 #![cfg(target_os = "macos")]
 
-use crate::dbg_println;
 use crate::updaters::Updater;
-use crate::util::new_skip_interval_after;
-use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::time::Duration;
 use system_configuration::network_reachability::{
     ReachabilityFlags, SCNetworkReachability, SchedulingError, SetCallbackError,
 };
-use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 #[derive(thiserror::Error, Debug)]
@@ -37,7 +32,7 @@ fn has_internet_from_flags(flags: ReachabilityFlags) -> bool {
 
 pub fn subscribe(updater: Updater) -> JoinHandle<()> {
     tokio::task::spawn(async move {
-        let res = super::fallback_listen(&updater);
+        let res = super::fallback_listen(&updater).await;
         updater.exit(res)
     })
 }
