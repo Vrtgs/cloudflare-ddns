@@ -1,9 +1,9 @@
 #[cfg(debug_assertions)]
 mod r#impl {
     use crate::updaters::{Updater, UpdatersManager};
-    use once_cell::sync::Lazy;
     use std::convert::Infallible;
     use std::{io, thread};
+    use std::sync::LazyLock;
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::Mutex;
 
@@ -17,7 +17,7 @@ mod r#impl {
         // stdin is globally shared, so this also needs to be globally shared.
         // it won't end too well if we restart only to have to thread trying to read from stdin,
         // and we use a tokio mutex as we hold the receiver across a recv await point.
-        static LINES: Lazy<Mutex<Receiver<io::Result<String>>>> = Lazy::new(|| {
+        static LINES: LazyLock<Mutex<Receiver<io::Result<String>>>> = LazyLock::new(|| {
             let (tx, rx) = tokio::sync::mpsc::channel(2);
 
             thread::spawn(move || {

@@ -100,15 +100,19 @@ thread_local! {
 }
 
 pub async fn has_internet() -> bool {
-    fn inner() -> bool {
-        NETWORK_MANGER
-            .with(|x| unsafe { get!(x).IsConnectedToInternet() })
-            .map_or(false, VARIANT_BOOL::as_bool)
+    fn inner() -> Result<bool, ()> {
+        NETWORK_MANGER.with(|x| unsafe {
+            x.as_ref()
+                .map_err(drop)
+                .and_then(|x| x.IsConnectedToInternet().map_err(drop))
+                .map(VARIANT_BOOL::as_bool)
+        })
     }
-
-    tokio::task::spawn_blocking(inner)
-        .await
-        .expect("internet check blocking task panicked")
+    
+    match tokio::task::spawn_blocking(inner).await {
+        Ok(Ok(x)) => x,
+        _ => super::fallback_has_internet().await
+    }
 }
 
 fn listen<F: Fn(), S: Future>(notify_callback: F, shutdown: S) -> Result<S::Output, UpdaterError> {

@@ -76,10 +76,6 @@ impl Config {
         self.0.ip_sources.concurrent_resolve
     }
 
-    pub fn wasm_driver_path(&self) -> &Path {
-        &self.0.ip_sources.driver_path
-    }
-
     pub fn authorize_request(&self, request: RequestBuilder) -> RequestBuilder {
         let request = request.header(AUTHORIZATION_EMAIL, self.account().email.clone());
 

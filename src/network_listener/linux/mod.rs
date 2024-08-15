@@ -6,8 +6,7 @@ use std::path::Path;
 use crate::updaters::Updater;
 use crate::util::GLOBAL_TOKIO_RUNTIME;
 use dbus::nonblock::{Proxy, SyncConnection};
-use once_cell::sync::Lazy;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::Duration;
 use futures::{StreamExt, TryStreamExt};
@@ -39,7 +38,7 @@ enum DbusError {
 }
 
 async fn check_network_status() -> Result<bool, DbusError> {
-    static NETWORK_MANAGER: Lazy<Result<&SyncConnection, dbus::Error>> = Lazy::new(|| {
+    static NETWORK_MANAGER: LazyLock<Result<&SyncConnection, dbus::Error>> = LazyLock::new(|| {
         let (resource, conn) = dbus_tokio::connection::new_session_sync()?;
 
         GLOBAL_TOKIO_RUNTIME.spawn(resource);

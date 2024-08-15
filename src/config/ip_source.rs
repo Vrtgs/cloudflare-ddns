@@ -1,6 +1,3 @@
-mod wasm;
-
-use crate::config::ip_source::wasm::with_wasm_driver;
 use crate::config::{Config, Deserializable};
 use crate::retrying_client::RetryingClient;
 use crate::util::{num_cpus, AddrParseError, AddrParseExt};
@@ -19,16 +16,13 @@ use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter, Write};
 use std::future::Future;
-use std::io::ErrorKind;
 use std::net::Ipv4Addr;
 use std::num::NonZeroU8;
 use std::ops::Deref;
-use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use thiserror::Error;
-use tokio::io;
 use toml::map::Map;
 use toml::Value;
 use url::Url;
@@ -41,16 +35,10 @@ pub enum GetIpError {
     Json(#[from] serde_json::Error),
     #[error("plaintext data contained invalid utf8: {0}")]
     Utf8(#[from] Utf8Error),
-    #[error("custom parser error: {0}")]
-    WasmParser(#[from] anyhow::Error),
     #[error("could not turn into a valid ip: {0}")]
     InvalidIp(#[from] AddrParseError),
     #[error("There is no ip source to get our ip from")]
     NoIpSources,
-    #[error(
-        "Ip source specified a wasm transformation step, but there was no wasm driver specified"
-    )]
-    NoWasmDriver,
 }
 
 #[derive(PartialOrd, PartialEq, Ord, Eq)]
@@ -154,9 +142,6 @@ pub enum ProcessStep {
 
     /// parses the current data as a json, and extracts the value from
     Json { key: Box<str> },
-
-    /// parses the current data based on a wasm parser
-    WasmTransform { module: Box<Path> },
 }
 
 fn get_json_key(json: &[u8], key: &str) -> serde_json::Result<serde_json::Value> {
@@ -195,7 +180,7 @@ struct Process {
 }
 
 impl Process {
-    async fn run(&self, mut bytes: Bytes, cfg: &Config) -> Result<Ipv4Addr, GetIpError> {
+    async fn run(&self, mut bytes: Bytes, _cfg: &Config) -> Result<Ipv4Addr, GetIpError> {
         use ProcessStep as S;
         for step in &*self.steps {
             match step {
@@ -220,10 +205,6 @@ impl Process {
                     };
                     bytes = val.into()
                 }
-                S::WasmTransform { module } => {
-                    bytes = with_wasm_driver!(async |x in (cfg.wasm_driver_path())| x.run(&**module, bytes).await)
-                        .await?.into()
-                }
             }
         }
 
@@ -231,7 +212,7 @@ impl Process {
     }
 }
 
-async fn into_process(mut steps: Vec<ProcessStep>) -> Result<Process, io::Error> {
+async fn into_process(mut steps: Vec<ProcessStep>) -> Process {
     while let Some(ProcessStep::Plaintext) = steps.last() {
         steps.pop();
     }
@@ -242,48 +223,32 @@ async fn into_process(mut steps: Vec<ProcessStep>) -> Result<Process, io::Error>
         .map(|step| async move {
             use ProcessStep as S;
             match step {
-                step @ (S::Json { .. } | S::Plaintext) => Some(Ok(step)),
+                step @ (S::Json { .. } | S::Plaintext) => Some(step),
                 S::Strip { prefix, suffix } => match (prefix, suffix) {
                     (None, None) => None,
-                    (prefix, suffix) => Some(Ok(S::Strip { prefix, suffix })),
+                    (prefix, suffix) => Some(S::Strip { prefix, suffix }),
                 },
-                S::WasmTransform { module } => {
-                    let step = tokio::fs::canonicalize(module)
-                        .await
-                        .and_then(|x| match x.to_str() {
-                            Some(_) => Ok(x),
-                            None => Err(io::Error::new(
-                                ErrorKind::InvalidData,
-                                "path contains invalid utf-8",
-                            )),
-                        })
-                        .map(PathBuf::into_boxed_path)
-                        .map(|module| S::WasmTransform { module });
-                    Some(step)
-                }
             }
         })
         .buffered(num_cpus().get())
         .filter_map(|x| async move { x })
-        .try_collect::<Vec<_>>()
+        .collect::<Vec<_>>()
         .await;
 
-    steps.map(|steps| Process {
+    Process {
         steps: steps.into(),
-    })
+    }
 }
 
 #[derive(PartialOrd, PartialEq, Ord, Eq)]
 pub struct Sources {
     sources: BTreeMap<Url, Process>,
-    pub(crate) driver_path: Box<Path>,
     pub(crate) concurrent_resolve: NonZeroU8,
 }
 
 impl Sources {
     pub async fn from_try_iter<I, Url, Steps, E>(
         iter: I,
-        driver_path: Option<Box<Path>>,
         concurrent_resolve: Option<NonZeroU8>,
     ) -> Result<Self>
     where
@@ -297,7 +262,7 @@ impl Sources {
                 let (url, steps) = res.map_err(Into::into)?;
                 Ok((
                     url::Url::parse(url.as_ref())?,
-                    into_process(steps.into_iter().collect()).await?,
+                    into_process(steps.into_iter().collect()).await,
                 ))
             })
             .buffer_unordered(num_cpus().get())
@@ -305,8 +270,6 @@ impl Sources {
             .await
             .map(|sources| Sources {
                 sources,
-                driver_path: driver_path
-                    .unwrap_or_else(|| Box::from(Path::new("./ddns-wasm-runtime.dll"))),
                 // # Safety:
                 // 16 is not = to 0, lol
                 concurrent_resolve: concurrent_resolve.unwrap_or_else(|| {
@@ -321,7 +284,6 @@ impl Sources {
 
     pub async fn from_iter<I, Url, Steps>(
         iter: I,
-        driver_path: Option<Box<Path>>,
         concurrent_resolve: Option<NonZeroU8>,
     ) -> Result<Self>
     where
@@ -331,7 +293,6 @@ impl Sources {
     {
         Self::from_try_iter(
             iter.into_iter().map(Ok::<_, Infallible>),
-            driver_path,
             concurrent_resolve,
         )
         .await
@@ -373,15 +334,10 @@ impl Deserializable for Sources {
                 NonZeroU8::new(val.try_into::<u8>()?).ok_or_else(|| anyhow::anyhow!("{key} can't be zero"))?
         );
 
-        get_field!(
-            driver_path: ["driver-path", "driver_path"] => |key, val| val.try_into::<Box<Path>>()?
-        );
-
         Self::from_try_iter(
             value
                 .into_iter()
                 .map(|(url, v)| v.try_into::<ProcessIntermediate>().map(|v| (url, v.steps))),
-            driver_path,
             concurrent_resolve,
         )
         .await
@@ -392,12 +348,6 @@ impl Debug for Sources {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_map()
             .entries(self.sources.iter().map(|(url, p)| (url.as_str(), p)))
-            .entries(
-                self.driver_path
-                    .deref()
-                    .ne(Path::new("./ddns-wasm-runtime.dll"))
-                    .then_some(("driver-path", &*self.driver_path)),
-            )
             .entry(&"concurrent-resolve", &self.concurrent_resolve)
             .finish()
     }
@@ -406,9 +356,8 @@ impl Debug for Sources {
 impl Default for Sources {
     fn default() -> Self {
         let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(
-            include!("../../../default/gen/sources.array"),
+            include!("../../default/gen/sources.array"),
             None,
-            None
         ))
         .poll(&mut Context::from_waker(noop_waker_ref())) else {
             abort_unreachable!("bad build artifact")

@@ -1,6 +1,3 @@
-use crate::abort;
-use once_cell::sync::Lazy;
-use std::convert::Infallible;
 use std::fmt::{Display, Formatter, Write};
 use std::net::{self, Ipv4Addr};
 use std::num::NonZero;
@@ -10,28 +7,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::{io, thread};
 use thiserror::Error;
-use tokio::runtime::Handle as TokioHandle;
 use tokio::time::{Instant, Interval, MissedTickBehavior};
-
-pub static GLOBAL_TOKIO_RUNTIME: Lazy<TokioHandle> = Lazy::new(|| {
-    macro_rules! rt_abort {
-        () => {{
-            |e| abort!("failed to initialize the global tokio runtime due to {e}")
-        }};
-    }
-
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap_or_else(rt_abort!());
-
-    let handle = runtime.handle().clone();
-    thread::Builder::new()
-        .spawn(move || runtime.block_on(std::future::pending::<Infallible>()))
-        .unwrap_or_else(rt_abort!());
-
-    handle
-});
 
 #[macro_export]
 macro_rules! non_zero {
@@ -70,10 +46,6 @@ pub async fn try_exists(path: impl AsRef<Path>) -> io::Result<bool> {
 
 pub fn new_skip_interval(period: Duration) -> Interval {
     new_skip_interval_at(Instant::now(), period)
-}
-
-pub fn new_skip_interval_after(period: Duration) -> Interval {
-    new_skip_interval_at(Instant::now() + period, period)
 }
 
 pub fn new_skip_interval_at(start: Instant, period: Duration) -> Interval {
