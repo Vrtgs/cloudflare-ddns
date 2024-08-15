@@ -130,7 +130,8 @@ async fn generate_dispatcher() -> io::Result<()> {
 
             eprintln!(
                 "{:?}",
-                std::fs::read_dir(&*path).and_then(|x| x.collect::<Result<Vec<_>, _>>())
+                std::fs::read_dir(format!("./modules/linux-dispatcher/target/{target}"))
+                    .and_then(|x| x.collect::<Result<Vec<_>, _>>())
             );
 
             tokio::fs::try_exists(&path)
