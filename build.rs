@@ -117,8 +117,22 @@ async fn generate_dispatcher() -> io::Result<()> {
             let path = format!(
                 "./modules/linux-dispatcher/target/{target}/linux-dispatcher/linux-dispatcher"
             );
-            // try to UPX
-            Command::new("upx").args(["--best", &*path]);
+
+            Command::new("upx")
+                .args(["--best", &*path])
+                .status()
+                .await?
+                .success()
+                .then_some(())
+                .ok_or_else(|| {
+                    io::Error::other("failed to pack linux-dispatcher, make sure upx is installed")
+                })?;
+
+            eprintln!(
+                "{:?}",
+                std::fs::read_dir(&*path).and_then(|x| x.collect::<Result<Vec<_>, _>>())
+            );
+
             tokio::fs::try_exists(&path)
                 .await?
                 .then_some(path)
