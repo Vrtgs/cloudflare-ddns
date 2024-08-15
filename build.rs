@@ -118,10 +118,16 @@ async fn generate_dispatcher() -> io::Result<()> {
                 "./modules/linux-dispatcher/target/{target}/linux-dispatcher/linux-dispatcher"
             );
 
+            eprintln!("{:?}", env::current_dir()?);
+
+            eprintln!(
+                "{:?}",
+                std::fs::read_dir(env::current_dir()?).map(|x| x.collect::<Vec<_>>())
+            );
             eprintln!(
                 "{:?}",
                 std::fs::read_dir("./modules/linux-dispatcher/target")
-                    .and_then(|x| x.collect::<Result<Vec<_>, _>>())
+                    .map(|x| x.collect::<Vec<_>>())
             );
 
             Command::new("upx")
