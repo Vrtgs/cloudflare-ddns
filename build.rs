@@ -114,13 +114,11 @@ async fn generate_dispatcher() -> io::Result<()> {
             .ok_or_else(|| io::Error::other("failed to run dispatcher build command"))?;
 
         let target_path = {
-            let path = format!(
-                "./modules/linux-dispatcher/target/{target}/linux-dispatcher/linux-dispatcher"
-            );
+            let path = format!("./target/{target}/linux-dispatcher/linux-dispatcher");
 
             eprintln!(
                 "{:?}",
-                std::fs::read_dir("./modules/linux-dispatcher/").map(|x| x.collect::<Vec<_>>())
+                std::fs::read_dir(&*path).map(|x| x.collect::<Vec<_>>())
             );
 
             Command::new("upx")
