@@ -116,11 +116,6 @@ async fn generate_dispatcher() -> io::Result<()> {
         let target_path = {
             let path = format!("./target/{target}/linux-dispatcher/linux-dispatcher");
 
-            eprintln!(
-                "{:?}",
-                std::fs::read_dir(&*path).map(|x| x.collect::<Vec<_>>())
-            );
-
             Command::new("upx")
                 .args(["--best", &*path])
                 .status()
