@@ -36,7 +36,6 @@ async fn make_default_sources_toml() -> io::Result<()> {
     tokio::fs::write("./default/gen/sources.toml", data.trim()).await
 }
 
-
 async fn make_default_sources_rs() -> io::Result<()> {
     let mut file = BufWriter::new(File::create("./default/gen/sources.array").await?);
 
@@ -102,11 +101,11 @@ async fn generate_dispatcher() -> io::Result<()> {
 
         let target = get_var!("TARGET")?;
         let target = target.trim();
-        
+
         Command::new("cargo")
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
-            .args(["build", "--release", "--target", target])
+            .args(["build", "--profile", "linux-dispatcher", "--target", target])
             .current_dir("./modules/linux-dispatcher")
             .status()
             .await?
@@ -117,6 +116,8 @@ async fn generate_dispatcher() -> io::Result<()> {
         let target_path = {
             let path =
                 format!("./modules/linux-dispatcher/target/{target}/release/linux-dispatcher");
+            // try to UPX
+            Command::new("upx").args(["--best", &*path]);
             tokio::fs::try_exists(&path)
                 .await?
                 .then_some(path)

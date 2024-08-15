@@ -1,21 +1,21 @@
+use crate::updaters::Updater;
+use crate::util;
+use crate::util::GLOBAL_TOKIO_RUNTIME;
+use anyhow::Result;
+use dbus::nonblock::{Proxy, SyncConnection};
+use futures::{StreamExt, TryStreamExt};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::num::NonZero;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
-use crate::updaters::Updater;
-use crate::util::GLOBAL_TOKIO_RUNTIME;
-use dbus::nonblock::{Proxy, SyncConnection};
 use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::Duration;
-use futures::{StreamExt, TryStreamExt};
+use tempfile::TempPath;
 use tokio::net::UnixListener;
 use tokio::sync::OnceCell as TokioOnceCell;
 use tokio::task::JoinHandle;
-use anyhow::Result;
-use tempfile::TempPath;
-use crate::util;
 
 trait ArcExt<T> {
     fn leak(this: Self) -> &'static T;
@@ -76,15 +76,18 @@ async fn check_network_status() -> Result<bool, DbusError> {
 pub async fn has_internet() -> bool {
     static SUPPORT_NETWORK_MANAGER: TokioOnceCell<bool> = TokioOnceCell::const_new();
 
-    match SUPPORT_NETWORK_MANAGER.get_or_init(|| async { check_network_status().await.is_ok() }).await {
+    match SUPPORT_NETWORK_MANAGER
+        .get_or_init(|| async { check_network_status().await.is_ok() })
+        .await
+    {
         true => match check_network_status().await {
             Ok(x) => x,
             Err(e) => {
                 eprintln!("Unexpected error checking internet {e} switching to fallback");
                 super::fallback_has_internet().await
             }
-        }
-        false => super::fallback_has_internet().await
+        },
+        false => super::fallback_has_internet().await,
     }
 }
 
@@ -102,11 +105,13 @@ async fn place_dispatcher() -> Result<()> {
                         .write(true)
                         .create_new(true)
                         .mode(0o777)
-                        .open(location)?.write_all(include_bytes!("./dispatcher"))?;
+                        .open(location)?
+                        .write_all(include_bytes!("./dispatcher"))?;
                 }
             }
             Ok(())
-        }).await?
+        })
+        .await?
     });
 
     let buffer = futures

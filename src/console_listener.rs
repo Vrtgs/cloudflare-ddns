@@ -2,8 +2,8 @@
 mod r#impl {
     use crate::updaters::{Updater, UpdatersManager};
     use std::convert::Infallible;
-    use std::{io, thread};
     use std::sync::LazyLock;
+    use std::{io, thread};
     use tokio::sync::mpsc::Receiver;
     use tokio::sync::Mutex;
 

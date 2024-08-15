@@ -55,9 +55,9 @@ mod sys {
     use std::ffi::OsStr;
     use std::num::NonZeroU16;
     use std::os::windows::ffi::OsStrExt;
-    use windows::core::{PCWSTR, w as wide};
+    use windows::core::{w as wide, PCWSTR};
     use windows::Win32::UI::WindowsAndMessaging::{
-        MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE, MessageBoxW,
+        MessageBoxW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE,
     };
 
     fn encode_wide(str: &OsStr) -> Vec<u16> {
@@ -100,8 +100,8 @@ mod sys {
     use core_foundation::string::CFString;
     use core_foundation_sys::base::CFOptionFlags;
     use core_foundation_sys::user_notification::{
-        CFUserNotificationDisplayAlert, kCFUserNotificationCautionAlertLevel,
-        kCFUserNotificationStopAlertLevel,
+        kCFUserNotificationCautionAlertLevel, kCFUserNotificationStopAlertLevel,
+        CFUserNotificationDisplayAlert,
     };
 
     fn present_alert(title: &str, message: &str, flags: CFOptionFlags) {
@@ -199,7 +199,6 @@ mod sys {
 
     static GTK_AVAILABLE: OnceLock<ErrorBackEnd> = OnceLock::new();
 
-
     // type GtkMessage = (Box<dyn FnOnce() + Send>, OneShotSender<()>);
     #[derive(Clone)]
     enum ErrorBackEnd {
@@ -218,13 +217,13 @@ mod sys {
                 //     }
                 //     let (task_send, rcv) = std::sync::mpsc::channel::<GtkMessage>();
                 //     let _ = send.send(Ok(task_send));
-                // 
+                //
                 //     for (msg, cb) in rcv {
                 //         msg();
                 //         let _ = cb.send(());
                 //     }
                 // });
-                // 
+                //
                 // match rcv.recv() {
                 //     Ok(Ok(sender)) => ErrorBackEnd::Gtk(sender),
                 //     _ => {
@@ -233,7 +232,7 @@ mod sys {
                 //         ErrorBackEnd::Logger
                 //     }
                 // }
-                
+
                 log::set_logger(LOGGERS.get_or_init(Loggers::default))
                     .expect("unable to set any form of logging");
                 ErrorBackEnd::Logger
@@ -245,7 +244,7 @@ mod sys {
     //     let app = Application::builder()
     //         .application_id("xyz.vrtgs.cloudflare-ddns.errors")
     //         .build();
-    // 
+    //
     //     app.connect_activate(move |app| {
     //         let window = ApplicationWindow::builder()
     //             .application(app)
@@ -253,7 +252,7 @@ mod sys {
     //             .default_width(0)
     //             .default_height(0)
     //             .build();
-    // 
+    //
     //         let dialog = MessageDialog::builder()
     //             .transient_for(&window)
     //             .modal(true)
@@ -262,17 +261,17 @@ mod sys {
     //             .text(&title)
     //             .secondary_text(&msg)
     //             .build();
-    // 
+    //
     //         let app = app.clone();
     //         dialog.connect_response(move |dialog, _| {
     //             dialog.close();
     //             window.close();
     //             app.quit();
     //         });
-    // 
+    //
     //         dialog.show();
     //     });
-    // 
+    //
     //     app.run();
     // }
 
@@ -290,7 +289,7 @@ mod sys {
             ErrorBackEnd::Logger => match message_type {
                 log::Level::Warn => log::warn!("[{title}]: {msg}"),
                 log::Level::Error => log::error!("[{title}]: {msg}"),
-                _ => unreachable!()
+                _ => unreachable!(),
             },
         }
     }

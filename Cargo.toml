@@ -13,6 +13,15 @@ edition = "2021"
     codegen-units = 1
     incremental = false
 
+[profile.linux-dispatcher]
+    inherits = "release"
+    opt-level = 'z'
+    strip = true
+    lto = "fat"
+    panic = "abort"
+    codegen-units = 1
+    incremental = false
+
 [profile.dev]
     opt-level = 0
     incremental = true

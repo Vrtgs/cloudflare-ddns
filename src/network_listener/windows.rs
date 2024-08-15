@@ -108,10 +108,10 @@ pub async fn has_internet() -> bool {
                 .map(VARIANT_BOOL::as_bool)
         })
     }
-    
+
     match tokio::task::spawn_blocking(inner).await {
         Ok(Ok(x)) => x,
-        _ => super::fallback_has_internet().await
+        _ => super::fallback_has_internet().await,
     }
 }
 

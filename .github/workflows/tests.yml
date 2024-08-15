@@ -18,6 +18,8 @@ jobs:
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          profile: minimal
+          components: rustfmt, clippy
       - name: Install dependencies on Ubuntu
         if: runner.os == 'Linux'
         run: sudo apt install libdbus-1-dev pkg-config
@@ -25,3 +27,12 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
+      - name: cargo fmt
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt --check
+      - name: cargo clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+

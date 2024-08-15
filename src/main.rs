@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::network_listener::has_internet;
 use crate::retrying_client::RetryingClient;
 use crate::updaters::{UpdaterEvent, UpdaterExitStatus};
-use crate::util::{EscapeExt, new_skip_interval};
+use crate::util::{new_skip_interval, EscapeExt};
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
 use serde::Deserialize;
@@ -29,10 +29,10 @@ mod config;
 mod console_listener;
 mod err;
 mod network_listener;
+mod pre;
 mod retrying_client;
 mod updaters;
 mod util;
-mod pre;
 
 struct DdnsContext {
     client: RetryingClient,

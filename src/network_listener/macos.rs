@@ -1,8 +1,9 @@
 #![cfg(target_os = "macos")]
 
-use std::convert::Infallible;
 use crate::dbg_println;
 use crate::updaters::Updater;
+use crate::util::new_skip_interval_after;
+use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 use system_configuration::network_reachability::{
@@ -10,7 +11,6 @@ use system_configuration::network_reachability::{
 };
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use crate::util::new_skip_interval_after;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UpdaterError {

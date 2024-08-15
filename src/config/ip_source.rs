@@ -184,7 +184,9 @@ impl Process {
         use ProcessStep as S;
         for step in &*self.steps {
             match step {
-                S::Plaintext => { simdutf8::basic::from_utf8(&bytes)?; },
+                S::Plaintext => {
+                    simdutf8::basic::from_utf8(&bytes)?;
+                }
                 S::Strip { prefix, suffix } => {
                     if let Some(prefix) = prefix {
                         if bytes.starts_with(prefix) {

@@ -1,7 +1,7 @@
 use proc_macro::TokenStream;
-use std::net::IpAddr;
 use quote::quote;
-use syn::{LitStr, parse_macro_input};
+use std::net::IpAddr;
+use syn::{parse_macro_input, LitStr};
 
 #[proc_macro]
 pub fn ip(item: TokenStream) -> TokenStream {
@@ -19,6 +19,7 @@ pub fn ip(item: TokenStream) -> TokenStream {
                 const { ::core::net::IpAddr::V6(::core::net::Ipv6Addr::from_bits(#bits)) }
             }
         }
-        Err(_) => syn::Error::new_spanned(str, "Invalid ip address").into_compile_error()
-    }.into()
+        Err(_) => syn::Error::new_spanned(str, "Invalid ip address").into_compile_error(),
+    }
+    .into()
 }

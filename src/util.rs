@@ -15,7 +15,7 @@ macro_rules! non_zero {
         const {
             match ::std::num::NonZero::new($x) {
                 Some(x) => x,
-                None => panic!("non zero can't be 0")
+                None => panic!("non zero can't be 0"),
             }
         }
     }};
@@ -43,7 +43,6 @@ pub async fn try_exists(path: impl AsRef<Path>) -> io::Result<bool> {
 
     inner(path.as_ref().to_owned()).await
 }
-
 
 pub fn new_skip_interval_after(period: Duration) -> Interval {
     new_skip_interval_at(Instant::now() + period, period)
