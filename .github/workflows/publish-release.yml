@@ -35,29 +35,24 @@ jobs:
     steps:
       - name: Install dependencies on Ubuntu
         if: runner.os == 'Linux'
-        run: sudo apt install libdbus-1-dev pkg-config
-
-      - name: Install Homebrew on macOS
-        if: runner.os == 'macOS'
-        run: /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        run: sudo apt install libdbus-1-dev pkg-config upx
 
       - name: Install UPX on macOS
         if: runner.os == 'macOS'
-        run: brew install upx
+        run: |
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          brew install upx
 
-      - name: Install Chocolatey on Windows
+      - name: Install UPX on Windows
         if: runner.os == 'Windows'
         run: |
           Set-ExecutionPolicy Bypass -Scope Process -Force; 
           [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; 
           iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          choco install upx
 
-      - name: Install UPX on Windows
-        if: runner.os == 'Windows'
-        run: choco install upx
 
       - uses: actions/checkout@v4
-
       - name: Build and compress binary
         run: |
           cargo build --release --target ${{ matrix.target }}
