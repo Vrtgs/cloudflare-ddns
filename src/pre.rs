@@ -31,6 +31,7 @@ fn set_working_dir() {
         })
         .unwrap_or_else(|e| crate::abort!("{e}"));
 }
+
 pub fn pre_run() {
     err::set_hook();
     #[cfg(target_os = "linux")]
