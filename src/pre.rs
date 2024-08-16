@@ -20,7 +20,6 @@ fn ensure_root() {
     }
 }
 
-#[cfg(target_os = "macos")]
 fn set_working_dir() {
     use std::env;
 
@@ -37,6 +36,5 @@ pub fn pre_run() {
     #[cfg(target_os = "linux")]
     ensure_root();
 
-    #[cfg(target_os = "macos")]
     set_working_dir();
 }
