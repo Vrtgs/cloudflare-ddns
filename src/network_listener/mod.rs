@@ -20,6 +20,12 @@ pub async fn has_internet() -> bool {
     sys_common::has_internet().await
 }
 
+pub fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<(), Infallible> {
+    let (updater, jh_entry) = updaters_manager.add_updater("network-listener");
+    jh_entry.insert(sys_common::subscribe(updater));
+    Ok(())
+}
+
 #[allow(dead_code)]
 async fn fallback_has_internet() -> bool {
     macro_rules! test_internet_from {
@@ -88,11 +94,5 @@ async fn fallback_listen(updater: &Updater) -> Result<(), Infallible> {
         _ = updater.wait_shutdown() => ()
     }
 
-    Ok(())
-}
-
-pub fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<(), Infallible> {
-    let (updater, jh_entry) = updaters_manager.add_updater("network-listener");
-    jh_entry.insert(sys_common::subscribe(updater));
     Ok(())
 }

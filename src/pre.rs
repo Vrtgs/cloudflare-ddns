@@ -10,7 +10,7 @@ fn ensure_root() {
     if !Uid::effective().is_root() {
         fn elevate() -> io::Result<Infallible> {
             let err = std::process::Command::new("sudo")
-                .arg(std::env::current_exe()?)
+                // contains exe path
                 .args(std::env::args_os())
                 .exec();
             Err(err)
