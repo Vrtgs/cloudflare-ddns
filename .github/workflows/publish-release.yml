@@ -52,5 +52,4 @@ jobs:
         with:
           bin: cloudflare-ddns
           target: ${{ matrix.target }}
-          checksum: sha512
           token: ${{ secrets.GITHUB_TOKEN }}
