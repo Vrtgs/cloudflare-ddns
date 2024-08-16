@@ -87,6 +87,8 @@ simple_logger = { version = "5.0.0", features = ["colors", "threads", "timestamp
 systemd-journal-logger = "2.1.1"
 log = "0.4.21"
 tempfile = "3.11.0"
+
+[target.'cfg(unix)'.dependencies]
 nix = { version = "0.29.0", features = ["user"] }
 
 [target.'cfg(windows)'.dependencies.windows]

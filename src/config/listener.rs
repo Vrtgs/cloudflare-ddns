@@ -175,10 +175,10 @@ pub async fn load() -> Result<(DdnsContext, UpdatersManager, ConfigStorage)> {
     }
 
     exists_or_include!(
-        "./config/api.toml", "../../default/api.toml";
-        "./config/http.toml", "../../default/http.toml";
-        "./config/misc.toml", "../../default/misc.toml";
-        "./config/sources.toml", "../../default/gen/sources.toml";
+        "./config/api.toml", "../../includes/api.toml";
+        "./config/http.toml", "../../includes/http.toml";
+        "./config/misc.toml", "../../includes/misc.toml";
+        "./config/sources.toml", "../../includes/gen/sources.toml";
     )?;
 
     let ip_sources = match deserialize_from_file("./config/sources.toml").await {

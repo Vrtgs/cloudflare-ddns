@@ -2,7 +2,7 @@ target
 .idea
 /src/api-key
 /src/secret
-/default/gen
+/includes/gen
 /config
 
 src/network_listener/linux/dispatcher

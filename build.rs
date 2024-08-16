@@ -8,13 +8,13 @@ use tokio::try_join;
 
 macro_rules! plaintext_sources {
     () => {
-        include!("./default/plaintext_sources")
+        include!("includes/plaintext_sources")
     };
 }
 
 macro_rules! json_sources {
     () => {
-        include!("./default/json_sources")
+        include!("includes/json_sources")
     };
 }
 
@@ -33,11 +33,11 @@ async fn make_default_sources_toml() -> io::Result<()> {
         writeln!(data, r#"steps = [{{ Json = {{ key = "{key}" }} }}]"#).unwrap();
     }
 
-    tokio::fs::write("./default/gen/sources.toml", data.trim()).await
+    tokio::fs::write("includes/gen/sources.toml", data.trim()).await
 }
 
 async fn make_default_sources_rs() -> io::Result<()> {
-    let mut file = BufWriter::new(File::create("./default/gen/sources.array").await?);
+    let mut file = BufWriter::new(File::create("includes/gen/sources.array").await?);
 
     #[derive(Clone)]
     struct VecDebug<T>(Vec<T>);
@@ -140,7 +140,7 @@ async fn generate_dispatcher() -> io::Result<()> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    tokio::fs::create_dir_all("./default/gen").await.unwrap();
+    tokio::fs::create_dir_all("includes/gen").await.unwrap();
 
     println!("cargo::rerun-if-changed=default");
     try_join!(
