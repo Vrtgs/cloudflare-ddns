@@ -38,7 +38,9 @@ members = [
 
 [features]
 default = []
+dev-build = []
 trace = ["tokio/tracing", "dep:console-subscriber"]
+
 
 [dependencies]
 tokio                 = { version = "1.39.2", features = ["full"] }

@@ -33,11 +33,11 @@ async fn make_default_sources_toml() -> io::Result<()> {
         writeln!(data, r#"steps = [{{ Json = {{ key = "{key}" }} }}]"#).unwrap();
     }
 
-    tokio::fs::write("includes/gen/sources.toml", data.trim()).await
+    tokio::fs::write("includes/sources.toml", data.trim()).await
 }
 
 async fn make_default_sources_rs() -> io::Result<()> {
-    let mut file = BufWriter::new(File::create("includes/gen/sources.array").await?);
+    let mut file = BufWriter::new(File::create("includes/sources.array").await?);
 
     #[derive(Clone)]
     struct VecDebug<T>(Vec<T>);
@@ -140,7 +140,7 @@ async fn generate_dispatcher() -> io::Result<()> {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    tokio::fs::create_dir_all("includes/gen").await.unwrap();
+    tokio::fs::create_dir_all("./includes").await.unwrap();
 
     println!("cargo::rerun-if-changed=default");
     try_join!(

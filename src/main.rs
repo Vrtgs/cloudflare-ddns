@@ -224,7 +224,6 @@ async fn real_main() -> Result<Action> {
     loop {
         tokio::select! {
             _ = interval.tick() => {
-
                 if !has_internet().await {
                     dbg_println!("no internet available skipping update");
                     continue;

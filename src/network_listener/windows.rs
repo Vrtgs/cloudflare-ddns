@@ -5,7 +5,6 @@
 
 use crate::updaters::Updater;
 use crate::{abort_unreachable, dbg_println};
-use std::future::Future;
 use std::marker::{PhantomData, PhantomPinned};
 use std::pin::Pin;
 use tokio::runtime::Handle as TokioHandle;
@@ -13,7 +12,6 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use windows::core::Result as WinResult;
 use windows::core::{implement, Interface, GUID};
-use windows::Win32::Foundation::VARIANT_BOOL;
 use windows::Win32::Networking::NetworkListManager::{
     INetworkEvents, INetworkEvents_Impl, INetworkListManager, NetworkListManager, NLM_CONNECTIVITY,
     NLM_CONNECTIVITY_IPV4_INTERNET, NLM_CONNECTIVITY_IPV6_INTERNET, NLM_NETWORK_PROPERTY_CHANGE,
@@ -32,6 +30,7 @@ pub enum UpdaterError {
     Unadvise(windows::core::Error),
 }
 
+#[derive(Copy, Clone)]
 struct Permit<'a>(PhantomData<Pin<&'a ComGuard>>);
 
 #[clippy::has_significant_drop]
@@ -66,6 +65,7 @@ impl Drop for ComGuard {
 struct UpdateManager<'a> {
     advise_cookie_net: Option<u32>,
     cxn_point_net: Com::IConnectionPoint,
+    inner: UpdaterInner<'a>,
     _permit: Permit<'a>,
 }
 
@@ -79,33 +79,33 @@ impl<'a> Drop for UpdateManager<'a> {
     }
 }
 
-macro_rules! get {
+macro_rules! unwrap_win32 {
     ($x: expr) => {
-        (($x)
-            .as_ref()
-            .unwrap_or_else(|err| abort_unreachable!("Fatal win32 api error {err}")))
+        $x.unwrap_or_else(|err| abort_unreachable!("Fatal win32 api error {err}"))
     };
 }
 
 thread_local! {
-    static COM_GUARD: Result<Pin<Box<ComGuard>>, UpdaterError> = ComGuard::new().map(Box::pin);
+    static COM_GUARD: Pin<Box<ComGuard>> = unwrap_win32!(ComGuard::new().map(Box::pin));
 
-    static NETWORK_MANGER: Result<INetworkListManager, UpdaterError> = {
-        COM_GUARD.with(|x| {
-            let _permit = get!(x).as_ref().get_permit();
+    static NETWORK_MANGER: INetworkListManager = {
+        let res = COM_GUARD.with(|x| {
+            let _permit = x.as_ref().get_permit();
             unsafe { Com::CoCreateInstance(&NetworkListManager, None, Com::CLSCTX_ALL) }
                 .map_err(UpdaterError::CreateNetworkListManager)
-        })
+        });
+
+        unwrap_win32!(res)
     }
 }
 
 pub async fn has_internet() -> bool {
     fn inner() -> Result<bool, ()> {
-        NETWORK_MANGER.with(|x| unsafe {
-            x.as_ref()
-                .map_err(drop)
-                .and_then(|x| x.IsConnectedToInternet().map_err(drop))
-                .map(VARIANT_BOOL::as_bool)
+        NETWORK_MANGER.with(|network_manager| {
+            match unsafe { network_manager.IsConnectedToInternet() } {
+                Ok(connected) => Ok(connected.as_bool()),
+                Err(_) => Err(()),
+            }
         })
     }
 
@@ -115,12 +115,12 @@ pub async fn has_internet() -> bool {
     }
 }
 
-fn listen<F: Fn(), S: Future>(notify_callback: F, shutdown: S) -> Result<S::Output, UpdaterError> {
+fn listen<F: Fn(), S: Fn() -> T, T>(notify_callback: F, shutdown: S) -> Result<T, UpdaterError> {
     COM_GUARD.with(move |com_guard| {
-        let com_guard = get!(com_guard).as_ref();
+        let _permit = Pin::as_ref(com_guard).get_permit();
 
         let cxn_point_net = NETWORK_MANGER.with(|network_list_manager| {
-            let cpc: Com::IConnectionPointContainer = get!(network_list_manager)
+            let cpc: Com::IConnectionPointContainer = network_list_manager
                 .cast()
                 .map_err(UpdaterError::Listening)?;
 
@@ -131,20 +131,20 @@ fn listen<F: Fn(), S: Future>(notify_callback: F, shutdown: S) -> Result<S::Outp
         let mut this = UpdateManager {
             advise_cookie_net: None,
             cxn_point_net,
-            _permit: com_guard.get_permit(),
+            inner: UpdaterInner {
+                notify_callback: &notify_callback,
+                _permit,
+            },
+            _permit,
         };
 
-        let callbacks: INetworkEvents = UpdaterInner {
-            notify_callback: &notify_callback,
-            _permit: com_guard.get_permit(),
-        }
-        .into();
+        let callbacks: INetworkEvents = this.inner.into();
 
         this.advise_cookie_net = Some(
             unsafe { this.cxn_point_net.Advise(&callbacks) }.map_err(UpdaterError::Listening)?,
         );
 
-        Ok(TokioHandle::current().block_on(shutdown))
+        Ok(shutdown())
     })
 }
 
@@ -159,11 +159,13 @@ pub fn subscribe(updater: Updater) -> JoinHandle<()> {
             }
         };
 
-        let shutdown = async {
-            tokio::select! {
-                _ = local_notify.notified() => (),
-                _ = updater.wait_shutdown() => ()
-            }
+        let shutdown = || {
+            TokioHandle::current().block_on(async {
+                tokio::select! {
+                    _ = local_notify.notified() => (),
+                    _ = updater.wait_shutdown() => ()
+                }
+            })
         };
 
         let res = listen(notify_callback, shutdown);
@@ -172,6 +174,7 @@ pub fn subscribe(updater: Updater) -> JoinHandle<()> {
 }
 
 #[implement(INetworkEvents)]
+#[derive(Copy, Clone)]
 struct UpdaterInner<'a> {
     notify_callback: &'a dyn Fn(),
     _permit: Permit<'a>,

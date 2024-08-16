@@ -2,7 +2,8 @@ target
 .idea
 /src/api-key
 /src/secret
-/includes/gen
+/includes/sources.array
+/includes/sources.toml
 /config
 
 src/network_listener/linux/dispatcher

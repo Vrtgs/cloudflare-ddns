@@ -178,7 +178,7 @@ pub async fn load() -> Result<(DdnsContext, UpdatersManager, ConfigStorage)> {
         "./config/api.toml", "../../includes/api.toml";
         "./config/http.toml", "../../includes/http.toml";
         "./config/misc.toml", "../../includes/misc.toml";
-        "./config/sources.toml", "../../includes/gen/sources.toml";
+        "./config/sources.toml", "../../includes/sources.toml";
     )?;
 
     let ip_sources = match deserialize_from_file("./config/sources.toml").await {
@@ -195,7 +195,7 @@ pub async fn load() -> Result<(DdnsContext, UpdatersManager, ConfigStorage)> {
         ($($name:ident, $path:expr, $msg:expr $(;)+)*) => {
             $(let $name = deserialize_from_file($path)
                 .await
-                .with_context(|| $msg)?;)*
+                .context($msg)?;)*
         };
     }
 

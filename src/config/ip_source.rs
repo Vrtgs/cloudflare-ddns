@@ -358,7 +358,7 @@ impl Debug for Sources {
 impl Default for Sources {
     fn default() -> Self {
         let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(
-            include!("../../includes/gen/sources.array"),
+            include!("../../includes/sources.array"),
             None,
         ))
         .poll(&mut Context::from_waker(noop_waker_ref())) else {
