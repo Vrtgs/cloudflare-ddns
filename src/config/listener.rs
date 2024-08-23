@@ -164,22 +164,17 @@ pub async fn load() -> Result<(DdnsContext, UpdatersManager, ConfigStorage)> {
     }
 
     macro_rules! exists_or_include {
-        ($($path: expr, $default: expr $(;)+)*) => {
+        ($($name: literal),*) => {
             tokio::try_join!($(async {
-                if !util::try_exists($path).await? {
-                    tokio::fs::write($path, include_str!($default)).await?;
+                if !util::try_exists(concat!("./config/", $name)).await? {
+                    tokio::fs::write(concat!("./config/", $name, ".toml"), include_str!(concat!("../../includes/", $name, ".toml"))).await?;
                 }
                 Ok::<_, io::Error>(())
             }),*)
         };
     }
 
-    exists_or_include!(
-        "./config/api.toml", "../../includes/api.toml";
-        "./config/http.toml", "../../includes/http.toml";
-        "./config/misc.toml", "../../includes/misc.toml";
-        "./config/sources.toml", "../../includes/sources.toml";
-    )?;
+    exists_or_include!("api", "http", "misc", "sources")?;
 
     let ip_sources = match deserialize_from_file("./config/sources.toml").await {
         Ok(x) => x,
