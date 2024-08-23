@@ -80,6 +80,11 @@ fn add_to_startup() {
     std::process::exit(0)
 }
 
+#[cfg(target_os = "windows")]
+fn add_to_startup() {
+    todo!("add to startup on windows")
+}
+
 #[cfg(target_os = "macos")]
 fn remove_from_startup() {
     ensure_root();
@@ -100,6 +105,11 @@ fn remove_from_startup() {
 #[cfg(target_os = "linux")]
 fn remove_from_startup() {
     todo!("remove from startup on linux")
+}
+
+#[cfg(target_os = "windows")]
+fn remove_from_startup() {
+    todo!("remove from startup on windows")
 }
 
 fn make_config() {
