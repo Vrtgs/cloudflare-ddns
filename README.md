@@ -15,7 +15,7 @@ api-token = "8dY3nH-As0krmv83n3pm1l"
 
 [zone]
 id     = "e3ed5fb820dd3ccc3be5f15765d329ad"
-record = "e3ed5fb820dd3ccc3be5f15765d329ad"
+record = "subdomain.domain.tld"
 # proxied = false
 ```
 
