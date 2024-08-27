@@ -91,13 +91,12 @@ fn remove_from_startup() {
 
     fn inner() -> std::io::Result<()> {
         const LAUNCHD_FILE: &str = "/Library/LaunchDaemons/xyz.vrtgs.cloudflare-ddns.plist";
-        std::fs::remove_file(LAUNCHD_FILE)?;
         std::process::Command::new("launchctl")
-            .args(["remove", "xyz.vrtgs.cloudflare-ddns"])
+            .args(["unload", "-w", "xyz.vrtgs.cloudflare-ddns"])
             .status()?
             .success()
             .then_some(())
-            .ok_or_else(|| std::io::Error::other("failed to remove launchd file"))
+            .ok_or_else(|| std::io::Error::other("failed to unload launchd file"))
     }
     inner().unwrap_or_else(|e| crate::abort!("{e}"));
 }
