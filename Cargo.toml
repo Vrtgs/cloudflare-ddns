@@ -43,7 +43,7 @@ trace = ["tokio/tracing", "dep:console-subscriber"]
 
 
 [dependencies]
-tokio                 = { version = "1.39.2", features = ["full"] }
+tokio                 = { version = "1.40.0", features = ["full"] }
 futures               = { version = "0.3.30"}
 serde                 = { version = "1.0.208", features = ["derive", "rc"] }
 anyhow                = { version = "1.0.86", features = ["backtrace"] }
@@ -117,4 +117,4 @@ core-foundation-sys  = "0.8.6"
 system-configuration = "0.6.0"
 
 [build-dependencies]
-tokio = { version = "1.39.2", features = ["rt", "macros", "fs", "io-util", "process"] }
+tokio = { version = "1.40.0", features = ["rt", "macros", "fs", "io-util", "process"] }
