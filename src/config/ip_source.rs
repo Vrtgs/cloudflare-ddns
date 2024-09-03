@@ -9,7 +9,6 @@ use futures::{StreamExt, TryStreamExt};
 use serde::de::{Error, MapAccess, SeqAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::de::SliceRead;
 use serde_json::Deserializer as JsonDeserializer;
 use simdutf8::basic::Utf8Error;
 use std::collections::BTreeMap;
@@ -145,7 +144,7 @@ pub enum ProcessStep {
 }
 
 fn get_json_key(json: &[u8], key: &str) -> serde_json::Result<serde_json::Value> {
-    let mut deserializer = JsonDeserializer::new(SliceRead::new(json));
+    let mut deserializer = JsonDeserializer::from_slice(json);
 
     struct JsonVisitor<'a> {
         key: &'a str,
@@ -161,7 +160,7 @@ fn get_json_key(json: &[u8], key: &str) -> serde_json::Result<serde_json::Value>
         fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
             let mut val = None;
 
-            while let Some((key, value)) = map.next_entry::<&str, serde_json::Value>()? {
+            while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
                 if val.is_none() && key == self.key {
                     val = Some(value);
                 }

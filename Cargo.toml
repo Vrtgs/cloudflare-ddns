@@ -43,16 +43,16 @@ trace = ["tokio/tracing", "dep:console-subscriber"]
 
 
 [dependencies]
-tokio                 = { version = "1.39.2", features = ["full"] }
+tokio                 = { version = "1.40.0", features = ["full"] }
 futures               = { version = "0.3.30"}
-serde                 = { version = "1.0.208", features = ["derive", "rc"] }
+serde                 = { version = "1.0.209", features = ["derive", "rc"] }
 anyhow                = { version = "1.0.86", features = ["backtrace"] }
 ip_macro              = { version = "*", path = "./modules/ip_macro" }
 console-subscriber    = { version = "0.4.0", optional = true }
 clap                  = { version = "4.5.16", features = ["derive"] }
 simdutf8              = "0.1.4"
 toml                  = "0.8.19"
-serde_json            = "1.0.125"
+serde_json            = "1.0.127"
 bytes                 = "1.7.0"
 thiserror             = "1.0.63"
 ahash                 = "0.8.11"
@@ -63,7 +63,7 @@ notify-debouncer-full = "0.3.1"
 idna                  = "1.0.2"
 
 [dependencies.reqwest]
-version = "0.12.5"
+version = "0.12.7"
 default-features = false
 features = [
     "charset",
@@ -117,4 +117,4 @@ core-foundation-sys  = "0.8.6"
 system-configuration = "0.6.0"
 
 [build-dependencies]
-tokio = { version = "1.39.2", features = ["rt", "macros", "fs", "io-util", "process"] }
+tokio = { version = "1.40.0", features = ["rt", "macros", "fs", "io-util", "process"] }
