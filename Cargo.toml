@@ -44,7 +44,7 @@ trace = ["tokio/tracing", "dep:console-subscriber"]
 
 [dependencies]
 tokio                 = { version = "1.40.0", features = ["full"] }
-futures               = { version = "0.3.30"}
+futures               = { version = "0.3.31"}
 serde                 = { version = "1.0.210", features = ["derive", "rc"] }
 anyhow                = { version = "1.0.89", features = ["backtrace"] }
 ip_macro              = { version = "*", path = "./modules/ip_macro" }
