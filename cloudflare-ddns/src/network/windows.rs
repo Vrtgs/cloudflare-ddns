@@ -240,8 +240,7 @@ fn get_ipv6_addr_sync() -> anyhow::Result<Option<Ipv6Addr>> {
     #[repr(C, align(16))]
     struct AlignedWord(u128);
 
-    const NUMBER_ELEMENTS_STACK_BUF: usize =
-        { WORKING_BUFFER_SIZE.div_ceil(size_of::<AlignedWord>()) };
+    const NUMBER_ELEMENTS_STACK_BUF: usize = WORKING_BUFFER_SIZE.div_ceil(size_of::<AlignedWord>());
 
     let mut heap_buffer: Vec<AlignedWord> = Vec::new();
     let mut stack_buffer: [MaybeUninit<AlignedWord>; NUMBER_ELEMENTS_STACK_BUF] =
