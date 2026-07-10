@@ -1,26 +1,23 @@
-use crate::addr_helper::{AddrParseError, AddrParseExt};
+use crate::addr_helper::{AddrParseError, AddrParseExt, IpType};
 use crate::config::{Config, Deserializable};
+use crate::non_zero;
 use crate::num_cpus::num_cpus;
 use crate::retrying_client::RetryingClient;
-use crate::{abort_unreachable, non_zero};
 use anyhow::Result;
 use bytes::Bytes;
-use futures::{StreamExt, TryStreamExt};
 use serde::de::{Error, MapAccess, SeqAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Deserializer as JsonDeserializer;
 use simdutf8::basic::Utf8Error;
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::fmt::{Debug, Formatter, Write};
-use std::future::Future;
 use std::net::IpAddr;
 use std::num::NonZero;
 use std::ops::Deref;
-use std::pin::pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
 use thiserror::Error;
 use toml::Value;
 use toml::map::Map;
@@ -32,17 +29,19 @@ pub enum GetIpError {
     Reqwest(#[from] reqwest::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("failed to get IPv6 through native methods: {0}")]
+    NativeIpv6GrabError(anyhow::Error),
     #[error("plaintext data contained invalid utf8: {0}")]
     Utf8(#[from] Utf8Error),
     #[error("could not turn into a valid ip: {0}")]
     InvalidIp(#[from] AddrParseError),
     #[error("There is no ip source to get our ip from")]
     NoIpSources,
-    #[error("All ip sources timed out")]
+    #[error("ip source timed out")]
     TimeOut(#[from] tokio::time::error::Elapsed),
 }
 
-#[derive(PartialOrd, PartialEq, Ord, Eq)]
+#[derive(Clone, PartialOrd, PartialEq, Ord, Eq)]
 pub struct StrOrBytes(pub Box<[u8]>);
 
 impl<'de> Deserialize<'de> for StrOrBytes {
@@ -130,18 +129,20 @@ impl Deref for StrOrBytes {
     }
 }
 
-#[derive(Debug, PartialOrd, PartialEq, Ord, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialOrd, PartialEq, Ord, Eq, Serialize, Deserialize)]
 pub enum ProcessStep {
     /// parses the current data as utf-8
     Plaintext,
 
     /// strips the current data of some leading and trailing bytes
     Strip {
+        #[serde(skip_serializing_if = "Option::is_none")]
         prefix: Option<StrOrBytes>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         suffix: Option<StrOrBytes>,
     },
 
-    /// parses the current data as a json, and extracts the value from
+    /// parses the current data as a json and extracts the value from
     Json { key: Box<str> },
 }
 
@@ -175,19 +176,50 @@ fn get_json_key(json: &[u8], key: &str) -> serde_json::Result<serde_json::Value>
     deserializer.deserialize_map(JsonVisitor { key })
 }
 
-#[derive(Clone, Debug, PartialOrd, PartialEq, Ord, Eq, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
+struct ProcessIntermediate<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r#type: Option<IpType>,
+    steps: Cow<'a, [ProcessStep]>,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Ord, Eq)]
 struct Process {
     steps: Arc<[ProcessStep]>,
 }
 
 impl Process {
+    pub fn build(mut steps: Vec<ProcessStep>) -> Process {
+        while steps
+            .pop_if(|step| matches!(step, ProcessStep::Plaintext))
+            .is_some()
+        {}
+
+        steps.dedup_by(|x, y| matches!((x, y), (ProcessStep::Plaintext, ProcessStep::Plaintext)));
+
+        steps.retain(|step| {
+            !matches!(
+                step,
+                ProcessStep::Strip {
+                    prefix: None,
+                    suffix: None,
+                }
+            )
+        });
+
+        Process {
+            steps: steps.into(),
+        }
+    }
+
     async fn run(&self, mut bytes: Bytes, _cfg: &Config) -> Result<IpAddr, GetIpError> {
-        for step in &*self.steps {
+        for step in self.steps.iter() {
             use ProcessStep as S;
             match step {
                 S::Plaintext => {
                     simdutf8::basic::from_utf8(&bytes)?;
                 }
+
                 S::Strip { prefix, suffix } => {
                     if let Some(prefix) = prefix
                         && bytes.starts_with(prefix)
@@ -198,9 +230,10 @@ impl Process {
                     if let Some(suffix) = suffix
                         && bytes.ends_with(suffix)
                     {
-                        bytes.truncate(bytes.len() - suffix.len())
+                        bytes.truncate(bytes.len().strict_sub(suffix.len()))
                     }
                 }
+
                 S::Json { key } => {
                     let val = match get_json_key(&bytes, key)? {
                         serde_json::Value::String(str) => str,
@@ -215,62 +248,28 @@ impl Process {
     }
 }
 
-async fn into_process(mut steps: Vec<ProcessStep>) -> Process {
-    while let Some(ProcessStep::Plaintext) = steps.last() {
-        steps.pop();
-    }
-
-    steps.dedup_by(|x, y| matches!((x, y), (ProcessStep::Plaintext, ProcessStep::Plaintext)));
-
-    let steps = futures::stream::iter(steps)
-        .map(|step| async move {
-            use ProcessStep as S;
-            match step {
-                step @ (S::Json { .. } | S::Plaintext) => Some(step),
-                S::Strip { prefix, suffix } => match (prefix, suffix) {
-                    (None, None) => None,
-                    (prefix, suffix) => Some(S::Strip { prefix, suffix }),
-                },
-            }
-        })
-        .buffered(num_cpus().get())
-        .filter_map(std::future::ready)
-        .collect::<Vec<_>>()
-        .await;
-
-    Process {
-        steps: steps.into(),
-    }
-}
-
 #[derive(PartialOrd, PartialEq, Ord, Eq)]
 pub struct Sources {
-    sources: BTreeMap<Url, Process>,
+    sources: BTreeMap<Url, (Option<IpType>, Process)>,
     pub(crate) concurrent_resolve: NonZero<u8>,
 }
 
 impl Sources {
-    pub async fn from_try_iter<I, Url, Steps, E>(
+    pub fn from_try_iter<I, Steps, E>(
         iter: I,
         concurrent_resolve: Option<NonZero<u8>>,
-    ) -> Result<Self>
+    ) -> Result<Self, E>
     where
-        I: IntoIterator<Item = Result<(Url, Steps), E>>,
-        E: Into<anyhow::Error>,
-        Url: AsRef<str>,
+        I: IntoIterator<Item = Result<(Url, Option<IpType>, Steps), E>>,
         Steps: IntoIterator<Item = ProcessStep>,
     {
-        futures::stream::iter(iter)
-            .map(|res| async move {
-                let (url, steps) = res.map_err(Into::into)?;
-                Ok((
-                    url::Url::parse(url.as_ref())?,
-                    into_process(steps.into_iter().collect()).await,
-                ))
+        iter.into_iter()
+            .map(|res| {
+                let (url, ip_type, steps) = res?;
+                let process = Process::build(steps.into_iter().collect());
+                Ok((url, (ip_type, process)))
             })
-            .buffer_unordered(num_cpus().get())
-            .try_collect::<BTreeMap<url::Url, Process>>()
-            .await
+            .collect::<Result<BTreeMap<Url, (Option<IpType>, Process)>, E>>()
             .map(|sources| Sources {
                 sources,
                 concurrent_resolve: concurrent_resolve.unwrap_or_else(|| {
@@ -278,43 +277,39 @@ impl Sources {
                     num_cpus()
                         .saturating_mul(non_zero!(4))
                         .try_into()
-                        // saturating convertsion
+                        // saturating conversion
                         .unwrap_or(NonZero::<u8>::MAX)
                 }),
             })
     }
 
-    pub async fn from_iter<I, Url, Steps>(
-        iter: I,
-        concurrent_resolve: Option<NonZero<u8>>,
-    ) -> Result<Self>
+    pub fn from_iter<I, Steps>(iter: I, concurrent_resolve: Option<NonZero<u8>>) -> Self
     where
-        I: IntoIterator<Item = (Url, Steps)>,
-        Url: AsRef<str>,
+        I: IntoIterator<Item = (Url, Option<IpType>, Steps)>,
         Steps: IntoIterator<Item = ProcessStep>,
     {
-        Self::from_try_iter(
+        let Ok(this) = Self::from_try_iter(
             iter.into_iter().map(Ok::<_, Infallible>),
             concurrent_resolve,
-        )
-        .await
+        );
+
+        this
     }
 
     pub fn sources(&self) -> impl Iterator<Item = IpSource> + '_ {
         self.sources
             .iter()
-            .map(|(url, process)| (url.clone(), process.clone()))
-            .map(|(url, process)| IpSource { url, process })
+            .map(|(url, val)| (url.clone(), val.clone()))
+            .map(|(url, (ip_type, process))| IpSource {
+                url,
+                ip_type: ip_type.unwrap_or(IpType::Any),
+                process,
+            })
     }
 }
 
 impl Deserializable for Sources {
     async fn deserialize(text: &str) -> Result<Self> {
-        #[derive(Deserialize)]
-        struct ProcessIntermediate {
-            steps: Vec<ProcessStep>,
-        }
-
         let mut value = toml::from_str::<Map<String, Value>>(text)?;
 
         macro_rules! get_field {
@@ -337,13 +332,17 @@ impl Deserializable for Sources {
                     .ok_or_else(|| anyhow::anyhow!("{key} can't be zero"))?
         );
 
-        Self::from_try_iter(
-            value
-                .into_iter()
-                .map(|(url, v)| v.try_into::<ProcessIntermediate>().map(|v| (url, v.steps))),
+        let this = Self::from_try_iter(
+            value.into_iter().map(|(url, v)| {
+                let url = Url::parse(url.as_str())?;
+                v.try_into::<ProcessIntermediate>()
+                    .map(|v| (url, v.r#type, v.steps.into_owned()))
+                    .map_err(anyhow::Error::new)
+            }),
             concurrent_resolve,
-        )
-        .await
+        )?;
+
+        Ok(this)
     }
 }
 
@@ -358,15 +357,7 @@ impl Debug for Sources {
 
 impl Default for Sources {
     fn default() -> Self {
-        let Poll::Ready(Ok(sources)) = pin!(Self::from_iter(
-            include!(concat!(env!("OUT_DIR"), "/sources.array")),
-            None,
-        ))
-        .poll(&mut Context::from_waker(Waker::noop())) else {
-            abort_unreachable!("bad build artifact")
-        };
-
-        sources
+        Self::from_iter(include!(concat!(env!("OUT_DIR"), "/sources.array")), None)
     }
 }
 
@@ -377,8 +368,14 @@ impl Serialize for Sources {
     {
         let mut map_serialize = serializer.serialize_map(Some(self.sources.len()))?;
 
-        for (url, proc) in self.sources.iter() {
-            map_serialize.serialize_entry(url.as_str(), proc)?
+        for (url, &(r#type, ref proc)) in self.sources.iter() {
+            map_serialize.serialize_entry(
+                url.as_str(),
+                &ProcessIntermediate {
+                    r#type,
+                    steps: Cow::Borrowed(&proc.steps),
+                },
+            )?
         }
 
         map_serialize.end()
@@ -387,10 +384,15 @@ impl Serialize for Sources {
 
 pub struct IpSource {
     url: Url,
+    ip_type: IpType,
     process: Process,
 }
 
 impl IpSource {
+    pub fn ip_type(&self) -> IpType {
+        self.ip_type
+    }
+
     pub async fn resolve_ip(
         self,
         client: &RetryingClient,

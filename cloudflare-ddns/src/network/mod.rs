@@ -8,7 +8,7 @@ use crate::time::new_skip_interval_after;
 use crate::updaters::{Updater, UpdatersManager};
 use ip_macro::ip;
 use std::convert::Infallible;
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv6Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -98,8 +98,12 @@ pub async fn has_internet() -> bool {
     sys_common::has_internet().await
 }
 
-pub fn subscribe(updaters_manager: &mut UpdatersManager) -> Result<(), Infallible> {
+pub fn subscribe_native_changes(updaters_manager: &mut UpdatersManager) -> Result<(), Infallible> {
     let (updater, jh_entry) = updaters_manager.add_updater("network-listener");
     jh_entry.insert(sys_common::subscribe(updater));
     Ok(())
+}
+
+pub async fn native_get_ipv6_addr() -> anyhow::Result<Option<Ipv6Addr>> {
+    sys_common::native_get_ipv6_addr().await
 }

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## [0.3.7] - 2026-7-10
+- Resolve IPv4 and IPv6 independently, each from its own set of sources
+- Detect the local IPv6 address natively (via OS APIs) before falling back
+  to external IP-lookup services, preferring stable addresses over
+  temporary/privacy ones
+- Add per-source IP type configuration (`type = "v4" | "v6" | "any"`) for
+  `sources.toml`
+- Update default IP sources: drop `api64.ipify.org`; add explicit IPv4/IPv6
+  pairs for ipify, ident.me, tnedi.me, icanhazip, nsupdate.info, and ipinfo.io
+- Watch `http.toml` and `misc.toml` for live changes; `api.toml` no longer
+  requires a restart to apply
+- Avoid infinite restart loop on repeated panics
+
 ## [0.3.6] - 2026-7-1
 - Fix linux dispatcher saving / placing logic
 

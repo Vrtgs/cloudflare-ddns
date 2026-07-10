@@ -1,14 +1,19 @@
 use crate::updaters::Updater;
 use crate::{abort, global_rt};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dbus::nonblock::{Proxy, SyncConnection};
 use futures::{StreamExt, TryStreamExt};
+use serde::Deserialize;
+use std::borrow::Cow;
 use std::fs::OpenOptions;
 use std::hint::cold_path;
 use std::io::{Read, Write};
+use std::net::Ipv6Addr;
 use std::num::NonZero;
+use std::ops::ControlFlow;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use std::{io, thread};
@@ -221,5 +226,70 @@ pub fn subscribe(updater: Updater) -> JoinHandle<()> {
             _ = updater.wait_shutdown() => Ok(())
         };
         updater.exit(res)
+    })
+}
+
+pub async fn native_get_ipv6_addr() -> Result<Option<Ipv6Addr>> {
+    #[derive(Deserialize)]
+    struct AddrInfo {
+        local: Option<String>,
+        #[serde(default)]
+        temporary: bool,
+    }
+
+    #[derive(Deserialize)]
+    struct Link {
+        #[serde(default)]
+        addr_info: Vec<AddrInfo>,
+    }
+
+    let output = tokio::process::Command::new("ip")
+        .args(["-6", "-j", "addr", "show", "up", "scope", "global"])
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        // FIXME(from_utf8_lossy_owned)
+        let stderr = match String::from_utf8_lossy(&output.stderr) {
+            Cow::Owned(str) => str,
+            Cow::Borrowed(_) => unsafe { String::from_utf8_unchecked(output.stderr) },
+        };
+
+        anyhow::bail!("failed to run `ip` cli tool (iproute2): stderr: {stderr}")
+    }
+
+    let json = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        .context("`ip -j` outputted malformed json (assuming ip is from the iproute2 package)")?;
+
+    let links = serde_json::from_value::<Vec<Link>>(json)
+        .context("failed to parse `ip -j` (assuming iproute2 format) addr output")?;
+
+    let addr = links
+        .into_iter()
+        .flat_map(|link| {
+            link.addr_info
+                .into_iter()
+                .filter_map(|addr| {
+                    addr.local
+                        .and_then(|local| Some((addr.temporary, Ipv6Addr::from_str(&local).ok()?)))
+                })
+                // `ip -6 addr show scope global`: excludes link-local
+                // (fe80::/10) and loopback, but keeps ULA (fc00::/7) since Linux
+                // assigns that scope global too.
+                .filter(|(_, ip)| !ip.is_unique_local())
+        })
+        .try_fold(None, |first: Option<Ipv6Addr>, (temporary, addr)| {
+            match temporary {
+                // stable address found, stop immediately
+                false => ControlFlow::Break(addr),
+
+                // remember first-seen as fallback
+                true => ControlFlow::Continue(first.or(Some(addr))),
+            }
+        });
+
+    Ok(match addr {
+        ControlFlow::Continue(maybe_addr) => maybe_addr,
+        ControlFlow::Break(addr) => Some(addr),
     })
 }

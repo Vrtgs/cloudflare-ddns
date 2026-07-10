@@ -77,11 +77,12 @@ impl Config {
     }
 
     pub fn authorize_request(&self, request: RequestBuilder) -> RequestBuilder {
-        let request = request.header(AUTHORIZATION_EMAIL, self.account().email.clone());
+        let account = self.account();
+        let request = request.header(AUTHORIZATION_EMAIL, account.email.clone());
 
-        match &self.account().auth {
-            Auth::Token(token_header) => request.header(AUTHORIZATION, token_header.clone()),
-            Auth::Key(key_header) => request.header(AUTHORIZATION_KEY, key_header.clone()),
+        match account.auth {
+            Auth::Token(ref token_header) => request.header(AUTHORIZATION, token_header.clone()),
+            Auth::Key(ref key_header) => request.header(AUTHORIZATION_KEY, key_header.clone()),
         }
     }
 }

@@ -37,15 +37,17 @@ async fn make_default_sources_toml() -> anyhow::Result<()> {
     let mut data = String::new();
 
     let plain_sources = plaintext_sources!();
-    for source in plain_sources {
+    for (source, ip_type) in plain_sources {
         writeln!(data, r#"["{source}"]"#)?;
+        writeln!(data, "type = \"{ip_type}\"")?;
         writeln!(data, "steps = [\"Plaintext\"]\n")?;
     }
 
     let plain_sources = json_sources!();
-    for (source, key) in plain_sources {
+    for (source, key, ip_type) in plain_sources {
         writeln!(data, r#"["{source}"]"#)?;
-        writeln!(data, r#"steps = [{{ Json = {{ key = "{key}" }} }}]"#)?;
+        writeln!(data, "type = \"{ip_type}\"")?;
+        writeln!(data, "steps = [{{ Json = {{ key = '{key}' }} }}]\n")?;
     }
 
     tokio::fs::write(OUT_DIR.join("sources.toml"), data.trim()).await?;
@@ -74,31 +76,66 @@ async fn make_default_sources_rs() -> anyhow::Result<()> {
         }
     }
 
+    #[derive(Copy, Clone)]
+    enum DisplayIpType {
+        Any,
+        V6,
+        V4,
+    }
+
+    impl DisplayIpType {
+        fn parse(str: &str) -> Self {
+            match str {
+                "any" => Self::Any,
+                "v4" => Self::V4,
+                "v6" => Self::V6,
+                _ => panic!("unknown ip type {str}"),
+            }
+        }
+    }
+
+    impl Debug for DisplayIpType {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            let str = match self {
+                DisplayIpType::Any => "IpType::Any",
+                DisplayIpType::V6 => "IpType::V6",
+                DisplayIpType::V4 => "IpType::V4",
+            };
+
+            f.write_str(str)
+        }
+    }
+
     macro_rules! vec {
         [$($args:tt)*] => {
             VecDebug(::std::vec![$($args)*])
         };
     }
 
-    macro_rules! format {
-        ($($args:tt)*) => {
-            DisplayStr(::std::format!($($args)*))
-        };
-    }
+    let make_url = |url: &str| {
+        let url = url::Url::parse(url).unwrap();
+        let url = url.as_str();
+        DisplayStr(format!(
+            "::url::Url::parse({url:?}).unwrap_or_else(|_| {{ crate::abort_unreachable!(\"malformed url: '{url}'\") }})"
+        ))
+    };
 
-    let mut sources = plaintext_sources!().map(|url| (url, vec![])).to_vec();
+    let mut sources = plaintext_sources!()
+        .map(|(url, ip_type)| (make_url(url), Some(DisplayIpType::parse(ip_type)), vec![]))
+        .to_vec();
 
-    sources.extend(json_sources!().map(|(source, key)| {
+    sources.extend(json_sources!().map(|(source, key, ip_type)| {
         (
-            source,
-            vec![format!(
+            make_url(source),
+            Some(DisplayIpType::parse(ip_type)),
+            vec![DisplayStr(format!(
                 r#"ProcessStep::Json {{ key: "{}".into() }}"#,
                 key.escape_default()
-            )],
+            ))],
         )
     }));
 
-    file.write_all(format!("{sources:?}").0.as_bytes()).await?;
+    file.write_all(format!("{sources:?}").as_bytes()).await?;
 
     file.flush().await?;
 
@@ -108,7 +145,7 @@ async fn make_default_sources_rs() -> anyhow::Result<()> {
 async fn generate_dispatcher() -> anyhow::Result<()> {
     if get_var!("CARGO_CFG_TARGET_OS")? == "linux" {
         println!("cargo::rerun-if-changed=/linux_dispatcher");
-        println!("cargo::rerun-if-changed=src/network_listener/linux/dispatcher");
+        println!("cargo::rerun-if-changed=src/network/linux/dispatcher");
 
         let target = get_var!("TARGET")?;
 

@@ -2,18 +2,18 @@
 
 extern crate core;
 
-use crate::addr_helper::IpType;
+use crate::addr_helper::{IpType, IpUpdateType};
 use crate::config::Config;
-use crate::config::ip_source::GetIpError;
+use crate::config::ip_source::{GetIpError, IpSource};
 use crate::json::EscapeExt;
-use crate::network_listener::has_internet;
 use crate::one_or_more::OneOrMore;
 use crate::retrying_client::RetryingClient;
 use crate::time::new_skip_interval;
 use crate::updaters::{UpdaterEvent, UpdaterExitStatus};
 use anyhow::{Context, Result, bail, ensure};
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::future::Either;
+use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::borrow::Cow;
@@ -36,7 +36,7 @@ mod console_listener;
 mod err;
 mod global_rt;
 mod json;
-mod network_listener;
+mod network;
 mod num_cpus;
 mod one_or_more;
 mod pre;
@@ -67,47 +67,156 @@ impl DDNSContext {
     }
 
     async fn get_ips(&self, cfg: &Config) -> Result<(Option<Ipv4Addr>, Option<Ipv6Addr>)> {
-        let last_err = Cell::new(None);
+        struct FlatVec<T>(Vec<T>);
 
-        let iter = cfg.ip_sources().map(|x| x.resolve_ip(&self.client, cfg));
-        let mut stream = futures::stream::iter(iter)
-            .buffer_unordered(cfg.concurrent_resolve().get() as usize)
-            .filter_map(|x| {
-                std::future::ready({
-                    match x {
-                        Ok(x) => Some(x),
-                        Err(err) => {
-                            last_err.set(Some(err));
-                            None
+        impl<T> Default for FlatVec<T> {
+            fn default() -> Self {
+                Self(vec![])
+            }
+        }
+
+        impl<T> Extend<Option<T>> for FlatVec<T> {
+            fn extend<I: IntoIterator<Item = Option<T>>>(&mut self, iter: I) {
+                self.0.extend(iter.into_iter().flatten())
+            }
+        }
+
+        fn make_specific_stream<T, S: Stream<Item = T>, F: FnOnce() -> S>(
+            make_stream: F,
+            need_stream: bool,
+        ) -> (Option<futures::stream::AbortHandle>, impl Stream<Item = T>) {
+            match need_stream {
+                true => {
+                    let (abort_handle, abort_registration) =
+                        futures::stream::AbortHandle::new_pair();
+
+                    let stream = make_stream();
+                    let abortable = futures::stream::Abortable::new(stream, abort_registration);
+
+                    (Some(abort_handle), Either::Right(abortable))
+                }
+
+                false => (None, Either::Left(futures::stream::empty())),
+            }
+        }
+
+        let (any_ip, ipv6, ipv4) = cfg
+            .ip_sources()
+            .map(|source| match source.ip_type() {
+                IpType::Any => (Some(source), None, None),
+                IpType::V6 => (None, Some(source), None),
+                IpType::V4 => (None, None, Some(source)),
+            })
+            .collect::<(FlatVec<_>, FlatVec<_>, FlatVec<_>)>();
+
+        let last_err = Cell::new(None);
+        let make_stream = |sources: FlatVec<IpSource>| {
+            let iter = sources
+                .0
+                .into_iter()
+                .map(|source| source.resolve_ip(&self.client, cfg));
+
+            futures::stream::iter(iter)
+                .buffer_unordered(cfg.concurrent_resolve().get() as usize)
+                .filter_map(|x| {
+                    std::future::ready({
+                        match x {
+                            Ok(x) => Some(x),
+                            Err(err) => {
+                                last_err.set(Some(err));
+                                None
+                            }
+                        }
+                    })
+                })
+        };
+
+        let update_type = cfg.zone().ip_update_type();
+
+        let (abort_ipv4, ipv4_stream) = make_specific_stream(
+            || make_stream(ipv4),
+            !matches!(update_type, IpUpdateType::V6),
+        );
+
+        // IPv6 gets special handling for 2 reasons:
+        // 1. IPv6 privacy addresses are used by default on most OSes, it works but is less useful
+        // 2. The device usually knows its own IPv6 unicast global address, no need to ask a server for it
+        let (abort_ipv6, ipv6_stream) = make_specific_stream(
+            || {
+                let stream = futures::stream::once(async {
+                    let try_native = network::native_get_ipv6_addr()
+                        .await
+                        .map_err(GetIpError::NativeIpv6GrabError);
+
+                    match try_native {
+                        Ok(Some(ip)) => {
+                            let ip = IpAddr::V6(ip);
+                            return Either::Right(futures::stream::iter([ip]));
+                        }
+                        Ok(None) => {}
+                        Err(error) => last_err.set(Some(error)),
+                    }
+
+                    Either::Left(make_stream(ipv6))
+                });
+
+                stream.flatten()
+            },
+            !matches!(update_type, IpUpdateType::V4),
+        );
+
+        let any_stream = make_stream(any_ip);
+
+        let (ipv4, ipv6) = {
+            let some_specific_ip = futures::stream::select(ipv4_stream, ipv6_stream);
+            let mut stream = std::pin::pin!(futures::stream::select(some_specific_ip, any_stream));
+
+            let mut ipv4 = Err(abort_ipv4);
+            let mut ipv6 = Err(abort_ipv6);
+
+            while let Some(addr) = stream.next().await {
+                match addr {
+                    IpAddr::V4(addr) if let Err(abort) = ipv4 => {
+                        ipv4 = Ok(addr);
+                        if let Some(abort) = abort {
+                            abort.abort()
                         }
                     }
-                })
-            });
+                    IpAddr::V6(addr) if let Err(abort) = ipv6 => {
+                        ipv6 = Ok(addr);
+                        if let Some(abort) = abort {
+                            abort.abort()
+                        }
+                    }
+                    // take only the first IP
+                    // filter the rest
+                    IpAddr::V4(_) | IpAddr::V6(_) => {}
+                }
 
-        let ip_ty = cfg.zone().ip_type();
+                let exit_cond = match update_type {
+                    IpUpdateType::Any => ipv4.is_ok() || ipv6.is_ok(),
+                    IpUpdateType::Both => ipv4.is_ok() && ipv6.is_ok(),
+                    IpUpdateType::V6 => ipv4.is_ok(),
+                    IpUpdateType::V4 => ipv6.is_ok(),
+                };
 
-        let mut ipv4 = None;
-        let mut ipv6 = None;
-
-        while let Some(addr) = stream.next().await {
-            match addr {
-                IpAddr::V4(addr) if ipv4.is_none() => ipv4 = Some(addr),
-                IpAddr::V6(addr) if ipv6.is_none() => ipv6 = Some(addr),
-                // take only the first IP
-                // filter the rest
-                IpAddr::V4(_) | IpAddr::V6(_) => {}
+                if exit_cond {
+                    break;
+                }
             }
 
-            let exit_cond = match ip_ty {
-                IpType::Any => ipv4.is_some() || ipv6.is_some(),
-                IpType::Both => ipv4.is_some() && ipv6.is_some(),
-                IpType::V6 => ipv4.is_some(),
-                IpType::V4 => ipv6.is_some(),
-            };
+            (ipv4.ok(), ipv6.ok())
+        };
 
-            if exit_cond {
-                break;
-            }
+        let error = match update_type {
+            IpUpdateType::Any => ipv4.is_none() && ipv6.is_none(),
+            IpUpdateType::Both => ipv4.is_none() || ipv6.is_none(),
+            IpUpdateType::V6 => ipv6.is_none(),
+            IpUpdateType::V4 => ipv4.is_none(),
+        };
+
+        if error {
+            bail!(last_err.into_inner().unwrap_or(GetIpError::NoIpSources))
         }
 
         Ok((ipv4, ipv6))
@@ -181,8 +290,8 @@ impl DDNSContext {
             Ok(Record { id, ip })
         }
 
-        Ok(match cfg.zone().ip_type() {
-            IpType::Any => {
+        Ok(match cfg.zone().ip_update_type() {
+            IpUpdateType::Any => {
                 let (v4, v6) = join!(
                     get_record_typed::<Ipv4Addr>(self, cfg),
                     get_record_typed::<Ipv6Addr>(self, cfg)
@@ -192,15 +301,15 @@ impl DDNSContext {
                     (v4, v6) => (v4.ok(), v6.ok()),
                 }
             }
-            IpType::Both => {
+            IpUpdateType::Both => {
                 let (v4, v6) = try_join!(
                     get_record_typed::<Ipv4Addr>(self, cfg),
                     get_record_typed::<Ipv6Addr>(self, cfg)
                 )?;
                 (Some(v4), Some(v6))
             }
-            IpType::V6 => (None, Some(get_record_typed::<Ipv6Addr>(self, cfg).await?)),
-            IpType::V4 => (Some(get_record_typed::<Ipv4Addr>(self, cfg).await?), None),
+            IpUpdateType::V6 => (None, Some(get_record_typed::<Ipv6Addr>(self, cfg).await?)),
+            IpUpdateType::V4 => (Some(get_record_typed::<Ipv4Addr>(self, cfg).await?), None),
         })
     }
 
@@ -317,11 +426,11 @@ impl DDNSContext {
 
             (Ok(status), Ok(UpdateStatus::NoRecordExists))
             | (Ok(UpdateStatus::NoRecordExists), Ok(status))
-                if let ty = cfg.zone().ip_type()
-                    && !matches!(ty, IpType::Any) =>
+                if let ty = cfg.zone().ip_update_type()
+                    && !matches!(ty, IpUpdateType::Any) =>
             {
                 assert!(
-                    !matches!(ty, IpType::Both),
+                    !matches!(ty, IpUpdateType::Both),
                     "BUG: requested both ip types; found one and try to continue updating only one"
                 );
 
@@ -390,8 +499,9 @@ async fn real_main() -> Result<Action> {
     let network_detection = cfg_store.load_config().misc().refresh().network_detection();
 
     if network_detection {
-        network_listener::subscribe(&mut updaters_manager)?;
+        network::subscribe_native_changes(&mut updaters_manager)?;
     }
+
     err::exit::subscribe(&mut updaters_manager)?;
     console_listener::subscribe(&mut updaters_manager)?;
 
@@ -400,7 +510,7 @@ async fn real_main() -> Result<Action> {
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                if !has_internet().await {
+                if !network::has_internet().await {
                     dbg_println!("no internet available skipping update");
                     continue;
                 }
@@ -411,13 +521,16 @@ async fn real_main() -> Result<Action> {
                     Ok(debug_message) => dbg_println!("{}", debug_message),
                 }
             },
+
             res = updaters_manager.watch() => match res {
                 UpdaterEvent::Update => interval.reset_immediately(),
                 UpdaterEvent::ServiceEvent(exit) => {
                     match *exit.status() {
                         UpdaterExitStatus::Success => {},
-                        UpdaterExitStatus::Panic | UpdaterExitStatus::Error(_) => {
-                            ctx.user_messages.error(format!("Updater abruptly exited: {exit}")).await
+                        UpdaterExitStatus::Panic
+                        | UpdaterExitStatus::Error(_) => {
+                            ctx.user_messages
+                                .error(format!("Updater abruptly exited: {exit}")).await
                         }
                         UpdaterExitStatus::TriggerExit(code) => {
                             updaters_manager.shutdown().await;
@@ -450,9 +563,16 @@ fn main() -> ExitCode {
     #[cfg(feature = "trace")]
     console_subscriber::init();
 
+    const MAX_PANIC_COUNT: u32 = 8;
+
     let mut runtime = make_runtime();
+    let mut panic_count = 0;
     loop {
         let exit = std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(real_main())));
+
+        if exit.is_ok() {
+            panic_count = 0;
+        }
 
         match exit {
             // Non-Recoverable
@@ -465,23 +585,29 @@ fn main() -> ExitCode {
             Ok(Err(e)) => {
                 dbg_println!("Fatal init error");
                 dbg_println!("Aborting...");
-                // best effort clean up
+                // best effort cleanup
                 let _ = Builder::new().spawn(move || drop(runtime));
                 abort!("{e}")
             }
 
             // Recoverable
             Ok(Ok(Action::Restart)) => dbg_println!("Restarting..."),
-            Err(_) => {
-                // old runtime might be in an invalid state
+            Err(panic) => {
+                if panic_count >= MAX_PANIC_COUNT {
+                    std::panic::resume_unwind(panic)
+                }
+
+                panic_count = panic_count.strict_add(1);
+
+                // the old runtime might be in an invalid state.
                 // replace it and drop it on a new thread to avoid hanging
                 let old_runtime = std::mem::replace(&mut runtime, make_runtime());
                 thread::spawn(move || drop(old_runtime));
 
                 dbg_println!("Panicked!!");
-                dbg_println!("Retrying in 15s...");
+                dbg_println!("Restarting in 15s...");
                 thread::sleep(Duration::from_secs(15));
-                dbg_println!("Retrying")
+                dbg_println!("Restarting")
             }
         }
     }

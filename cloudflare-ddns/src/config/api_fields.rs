@@ -1,4 +1,4 @@
-use crate::addr_helper::IpType;
+use crate::addr_helper::IpUpdateType;
 use crate::config::Deserializable;
 use anyhow::Result;
 use reqwest::header::HeaderValue;
@@ -61,7 +61,7 @@ pub struct Zone {
     id: Box<str>,
     record: Box<str>,
     proxied: bool,
-    ip_type: IpType,
+    ip_type: IpUpdateType,
 }
 
 impl<'de> Deserialize<'de> for Zone {
@@ -78,7 +78,7 @@ impl<'de> Deserialize<'de> for Zone {
             proxied: bool,
 
             #[serde(default)]
-            ip: IpType,
+            ip: IpUpdateType,
         }
 
         let ZoneInner {
@@ -113,7 +113,7 @@ impl Zone {
         self.proxied
     }
 
-    pub fn ip_type(&self) -> IpType {
+    pub fn ip_update_type(&self) -> IpUpdateType {
         self.ip_type
     }
 }

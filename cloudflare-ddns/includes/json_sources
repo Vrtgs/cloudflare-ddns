@@ -1,3 +1,4 @@
 [
-    ("https://api.ipify.org/?format=json", "ip")
+    ("https://api4.ipify.org/?format=json", "ip", "v4"),
+    ("https://api6.ipify.org/?format=json", "ip", "v6"),
 ]

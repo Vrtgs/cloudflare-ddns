@@ -5,16 +5,26 @@
 
 use crate::updaters::Updater;
 use crate::{abort_unreachable, dbg_println};
+use anyhow::Context;
 use std::marker::{PhantomData, PhantomPinned};
+use std::mem::MaybeUninit;
+use std::net::Ipv6Addr;
 use std::pin::Pin;
+use std::ptr::NonNull;
 use tokio::runtime::Handle as TokioHandle;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use windows::Win32::Foundation::{ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS};
+use windows::Win32::NetworkManagement::IpHelper::{
+    GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_FRIENDLY_NAME,
+    GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
+};
 use windows::Win32::Networking::NetworkListManager::{
     INetworkEvents, INetworkEvents_Impl, INetworkListManager, NLM_CONNECTIVITY,
     NLM_CONNECTIVITY_IPV4_INTERNET, NLM_CONNECTIVITY_IPV6_INTERNET, NLM_NETWORK_PROPERTY_CHANGE,
     NetworkListManager,
 };
+use windows::Win32::Networking::WinSock::{AF_INET6, IpSuffixOriginRandom, SOCKADDR_IN6};
 use windows::Win32::System::Com;
 use windows::core::Result as WinResult;
 use windows::core::{GUID, Interface, implement};
@@ -210,4 +220,129 @@ impl<'a> INetworkEvents_Impl for UpdaterInner_Impl<'a> {
     fn NetworkPropertyChanged(&self, _: &GUID, _: NLM_NETWORK_PROPERTY_CHANGE) -> WinResult<()> {
         Ok(())
     }
+}
+
+fn get_ipv6_addr_sync() -> anyhow::Result<Option<Ipv6Addr>> {
+    // Microsoft's recommended starting size to avoid the overflow/retry dance in
+    // the common case (see "Remarks" on the GetAdaptersAddresses docs page).
+    const WORKING_BUFFER_SIZE: usize = 32 * 1024;
+    const MAX_TRIES: u8 = 5;
+
+    let flags = GAA_FLAG_SKIP_ANYCAST
+        | GAA_FLAG_SKIP_MULTICAST
+        | GAA_FLAG_SKIP_DNS_SERVER
+        | GAA_FLAG_SKIP_FRIENDLY_NAME;
+
+    let cheap_buffer_size = u32::try_from(WORKING_BUFFER_SIZE).unwrap_or(u32::MAX);
+
+    let mut buf_len = cheap_buffer_size;
+
+    #[repr(C, align(16))]
+    struct AlignedWord(u128);
+
+    const NUMBER_ELEMENTS_STACK_BUF: usize =
+        { WORKING_BUFFER_SIZE.div_ceil(size_of::<AlignedWord>()) };
+
+    let mut heap_buffer: Vec<AlignedWord> = Vec::new();
+    let mut stack_buffer: [MaybeUninit<AlignedWord>; NUMBER_ELEMENTS_STACK_BUF] =
+        [const { MaybeUninit::uninit() }; NUMBER_ELEMENTS_STACK_BUF];
+
+    let mut tries = 0;
+
+    let adapters_ptr: *mut IP_ADAPTER_ADDRESSES_LH = loop {
+        let buffer = match buf_len <= cheap_buffer_size {
+            true => stack_buffer.as_mut_ptr(),
+            false => {
+                heap_buffer.clear();
+                let word_count = buf_len.div_ceil(
+                    const {
+                        // FIXME(const convert)
+                        let size_of_word = size_of::<AlignedWord>();
+                        assert!(size_of_word < 256);
+                        size_of_word as u32
+                    },
+                );
+                let new_capacity = usize::try_from(word_count).unwrap_or(usize::MAX);
+                heap_buffer
+                    .try_reserve_exact(new_capacity)
+                    .context("could not get ipv6 method in a native way, because of OOM")?;
+
+                heap_buffer.spare_capacity_mut().as_mut_ptr()
+            }
+        };
+
+        let ptr = buffer.cast::<IP_ADAPTER_ADDRESSES_LH>();
+
+        // SAFETY: `ptr` points at a `buf_len`-byte buffer we just allocated;
+        // GetAdaptersAddresses will only write within that bound and updates
+        // `buf_len` in place if it needs more room.
+        let ret = unsafe {
+            GetAdaptersAddresses(AF_INET6.0.into(), flags, None, Some(ptr), &mut buf_len)
+        };
+
+        if ret == ERROR_SUCCESS.0 {
+            break ptr;
+        } else if ret == ERROR_BUFFER_OVERFLOW.0 && tries < MAX_TRIES {
+            tries = tries.strict_add(1);
+            // buf_len now holds the required size, loop and reallocate
+            continue;
+        } else {
+            anyhow::bail!(
+                "`GetAdaptersAddresses` failed with error: {}",
+                std::io::Error::from_raw_os_error(ret.cast_signed())
+            );
+        }
+    };
+
+    let mut candidate: Option<Ipv6Addr> = None;
+    let mut adapter = adapters_ptr;
+
+    // SAFETY: `adapter` is either the head returned above, or `.Next` from
+    // a previously validated node in the linked list GetAdaptersAddresses gave us.
+    'candidate_search: while let Some(adapter_ref) = unsafe { adapter.as_ref() } {
+        let mut unicast = adapter_ref.FirstUnicastAddress;
+
+        // SAFETY: same reasoning here; walking a linked list owned by `buffer`.
+        while let Some(ua) = unsafe { unicast.as_ref() } {
+            if let Some(sockaddr) = NonNull::new(ua.Address.lpSockaddr) {
+                // SAFETY: lpSockaddr is non-null and, for AF_INET6 entries,
+                // points at a SOCKADDR_IN6-sized structure per the WinSock contract.
+                let family = unsafe { (*sockaddr.as_ptr()).sa_family };
+                if family == AF_INET6 {
+                    let sin6 = unsafe { sockaddr.cast::<SOCKADDR_IN6>().as_ref() };
+                    // SAFETY: reading a plain [u8; 16] union field - no invalid
+                    // bit patterns possible for this type.
+                    let octets = unsafe { sin6.sin6_addr.u.Byte };
+                    let ip = Ipv6Addr::from_octets(octets);
+
+                    let valid_global = !ip.is_loopback()
+                        && !ip.is_unicast_link_local()
+                        && !ip.is_unique_local()
+                        && !ip.is_multicast();
+
+                    if valid_global {
+                        let temporary = ua.SuffixOrigin == IpSuffixOriginRandom;
+                        if !temporary {
+                            candidate = Some(ip);
+                            break 'candidate_search;
+                        }
+
+                        candidate = candidate.or(Some(ip));
+                    }
+                }
+            }
+
+            unicast = ua.Next;
+        }
+
+        adapter = adapter_ref.Next;
+    }
+
+    Ok(candidate)
+}
+
+pub async fn native_get_ipv6_addr() -> anyhow::Result<Option<Ipv6Addr>> {
+    tokio::task::spawn_blocking(get_ipv6_addr_sync)
+        .await
+        .context("failed to spawn ipv6 native addr grab task")?
 }

@@ -1,19 +1,26 @@
 [
-    "https://api64.ipify.org",
-    "https://checkip.amazonaws.com/",
-    "https://api4.ipify.org/",
-    "https://ipv4.icanhazip.com/",
-    "https://4.ident.me/",
-    "https://v4.tnedi.me/",
-    "https://v4.ipv6-test.com/api/myip.php",
-    "https://myip.dnsomatic.com/",
-    "https://ipinfo.io/ip",
-    "https://ipv4.nsupdate.info/myip",
-    "https://dynamic.zoneedit.com/checkip.html",
-    "https://api6.ipify.org/",
-    "https://ipv6.icanhazip.com/",
-    "https://6.ident.me/",
-    "https://v6.tnedi.me/",
-    "https://v6.ipv6-test.com/api/myip.php",
-    "https://ipv6.nsupdate.info/myip",
+    ("https://api4.ipify.org/", "v4"),
+    ("https://api6.ipify.org/", "v6"),
+
+    ("https://4.ident.me/", "v4"),
+    ("https://6.ident.me/", "v6"),
+
+    ("https://v4.tnedi.me/", "v4"),
+    ("https://v6.tnedi.me/", "v6"),
+
+    ("https://ipv4.icanhazip.com/", "v4"),
+    ("https://ipv6.icanhazip.com/", "v6"),
+
+    ("https://ipv4.nsupdate.info/myip", "v4"),
+    ("https://ipv6.nsupdate.info/myip", "v6"),
+
+    // https://ipinfo.io/developers/ipinfo-api#:~:text=IPv6%20API%20endpoint,-IPinfo%27s%20API%20ensures
+    // ipinfo.io: always IPv4
+    // v6.ipinfo.io: always IPv6
+    ("https://ipinfo.io/ip", "v4"),
+    ("https://v6.ipinfo.io/ip", "v6"),
+
+    ("https://myip.dnsomatic.com/", "any"),
+    ("https://checkip.amazonaws.com/", "any"),
+    ("https://dynamic.zoneedit.com/checkip.html", "any"),
  ]

@@ -1,5 +1,5 @@
 use serde::de::Error;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::net;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -84,12 +84,8 @@ impl AddrParseExt for IpAddr {
     }
 }
 
-#[derive(Debug, Error)]
-#[error("unknown ip type {0}")]
-pub struct IpTypeError(String);
-
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Debug, Default)]
-pub enum IpType {
+pub enum IpUpdateType {
     Any,
     Both,
     V6,
@@ -97,25 +93,72 @@ pub enum IpType {
     V4,
 }
 
+#[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Debug, Default)]
+pub enum IpType {
+    Any,
+    V6,
+    #[default]
+    V4,
+}
+
+impl From<IpType> for IpUpdateType {
+    fn from(value: IpType) -> Self {
+        match value {
+            IpType::Any => Self::Any,
+            IpType::V6 => Self::V6,
+            IpType::V4 => Self::V4,
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for IpType {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        String::deserialize(deserializer).and_then(|s| Self::from_str(&s).map_err(Error::custom))
+        String::deserialize(deserializer).and_then(|mut str| {
+            str.make_ascii_lowercase();
+
+            match str.as_str() {
+                "any" => Ok(Self::Any),
+                "v4" | "ipv4" => Ok(Self::V4),
+                "v6" | "ipv6" => Ok(Self::V6),
+                ty => Err(Error::custom(format_args!("unknown ip type {ty}"))),
+            }
+        })
     }
 }
 
-impl FromStr for IpType {
-    type Err = IpTypeError;
+impl Serialize for IpType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let str = match *self {
+            IpType::Any => "any",
+            IpType::V6 => "ipv4",
+            IpType::V4 => "ipv6",
+        };
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match &*s.to_lowercase() {
-            "any" => Ok(Self::Any),
-            "both" => Ok(Self::Both),
-            "v4" | "ipv4" => Ok(Self::V4),
-            "v6" | "ipv6" => Ok(Self::V6),
-            _ => Err(IpTypeError(s.to_string())),
-        }
+        str::serialize(str, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for IpUpdateType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        String::deserialize(deserializer).and_then(|mut str| {
+            str.make_ascii_lowercase();
+
+            match str.as_str() {
+                "any" => Ok(Self::Any),
+                "both" => Ok(Self::Both),
+                "v4" | "ipv4" => Ok(Self::V4),
+                "v6" | "ipv6" => Ok(Self::V6),
+                ty => Err(Error::custom(format_args!("unknown ip update type {ty}"))),
+            }
+        })
     }
 }

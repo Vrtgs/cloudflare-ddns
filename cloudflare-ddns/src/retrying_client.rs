@@ -59,10 +59,11 @@ pub struct RetryingClient {
 
 impl RetryingClient {
     pub fn new(cfg: &Config) -> Self {
-        let _cfg = cfg;
+        let _http_client_cfg = cfg.http().client();
+
         macro_rules! get {
             ($id: ident) => {
-                _cfg.http().client().$id()
+                _http_client_cfg.$id()
             };
         }
 

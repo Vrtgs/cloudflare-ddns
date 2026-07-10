@@ -59,6 +59,10 @@ async fn listen(
             notify::Config::default().with_compare_contents(true),
         )?;
 
+        watcher.watch(Path::new("./config/http.toml"), RecursiveMode::NonRecursive)?;
+
+        watcher.watch(Path::new("./config/misc.toml"), RecursiveMode::NonRecursive)?;
+
         watcher.watch(
             Path::new("./config/sources.toml"),
             RecursiveMode::NonRecursive,
@@ -91,9 +95,15 @@ async fn listen(
             Ok(()) = rx.changed() => {
                 let events = {
                     let borrow = rx.borrow_and_update();
-                    borrow.as_ref().map_err(|e|{
-                        e.iter().map(|e| format!("listen event error: {e}")).collect::<Vec<_>>()
-                    }).map_err(|e| anyhow!("Error listening to config {e:?}")).cloned()
+                    borrow
+                        .as_ref()
+                        .map_err(|e|{
+                            e.iter()
+                            .map(|e| format!("listen event error: {e}"))
+                            .collect::<Vec<_>>()
+                        })
+                        .map_err(|e| anyhow!("Error listening to config {e:?}"))
+                        .cloned()
                 };
 
                 let events = match events {
@@ -105,7 +115,9 @@ async fn listen(
                 };
 
                 macro_rules! change_occurred_in {
-                    ($path:literal in $events:expr) => { $events.iter().any(|e| e.paths.iter().any(|p| p.ends_with($path))) };
+                    ($path:literal in $events:expr) => {
+                        $events.iter().any(|e| e.paths.iter().any(|p| p.ends_with($path)))
+                    };
                 }
 
                 macro_rules! lazy_reload_config {
@@ -128,10 +140,13 @@ async fn listen(
                                     let old_cfg = cfg.load();
                                     if part == *old_cfg.$part { continue }
 
+                                    if $restart {
+                                        return Ok(true);
+                                    }
+
                                     let mut new_cfg = CfgInner::clone(&old_cfg);
                                     new_cfg.$part = Arc::new(part);
                                     cfg.store(Arc::new(new_cfg));
-                                    if $restart { return Ok(true); }
                                     if updater.update().is_err() { break }
                                 }
                                 Err(e) => msg_bx_handle.warning(format!("config listen error: {e}")).await
@@ -140,9 +155,12 @@ async fn listen(
                     };
                 }
 
-                lazy_reload_config!("api.toml"; api_fields; true);
+                // creates http client; needs restart
                 lazy_reload_config!("http.toml"; http; true);
-                lazy_reload_config!("misc.toml";  misc; true);
+                // creates interval and changes updater structure; requires restart.
+                lazy_reload_config!("misc.toml"; misc; true);
+
+                lazy_reload_config!("api.toml"; api_fields; false);
                 lazy_reload_config!("sources.toml"; ip_sources; false);
             }
             _ = &mut shutdown => break,
