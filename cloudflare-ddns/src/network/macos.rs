@@ -3,10 +3,7 @@
 use crate::updaters::Updater;
 use anyhow::Context;
 use std::fmt::Debug;
-use std::mem::MaybeUninit;
-use std::net::Ipv6Addr;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::ptr::NonNull;
 use system_configuration::network_reachability::{
     ReachabilityFlags, SCNetworkReachability, SchedulingError, SetCallbackError,
 };
