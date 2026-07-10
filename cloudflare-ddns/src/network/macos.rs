@@ -9,15 +9,6 @@ use system_configuration::network_reachability::{
 };
 use tokio::task::JoinHandle;
 
-#[derive(thiserror::Error, Debug)]
-pub enum UpdaterError {
-    #[error("Couldn't set the callback to network events: {0}")]
-    Callback(#[from] SetCallbackError),
-
-    #[error("Couldn't Schedule callback execution with CFRunloop: {0}")]
-    Runloop(#[from] SchedulingError),
-}
-
 pub async fn has_internet() -> bool {
     let sc = SCNetworkReachability::from(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
     sc.reachability().map_or(false, has_internet_from_flags)

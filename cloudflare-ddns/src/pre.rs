@@ -73,18 +73,21 @@ fn set_working_dir() {
 }
 
 #[cfg(target_os = "macos")]
+const LAUNCHD_FILE: &str = "/Library/LaunchDaemons/xyz.vrtgs.cloudflare-ddns.plist";
+
+#[cfg(target_os = "macos")]
 fn add_to_startup() {
     rerun_as_root();
 
     fn inner() -> std::io::Result<()> {
-        const LAUNCHD_FILE: &str = "/Library/LaunchDaemons/xyz.vrtgs.cloudflare-ddns.plist";
         std::fs::write(
             LAUNCHD_FILE,
             format!(
                 include_str!("../includes/macos_launchd.plist"),
-                program_path = std::env::current_exe()?.display()
+                program_path = std::path::absolute(std::env::current_exe()?)?.display()
             ),
         )?;
+
         std::process::Command::new("launchctl")
             .args(["load", "-w", LAUNCHD_FILE])
             .status()?
@@ -128,13 +131,14 @@ fn remove_from_startup() {
     rerun_as_root();
 
     fn inner() -> std::io::Result<()> {
-        const LAUNCHD_FILE: &str = "/Library/LaunchDaemons/xyz.vrtgs.cloudflare-ddns.plist";
         std::process::Command::new("launchctl")
             .args(["unload", "-w", "xyz.vrtgs.cloudflare-ddns"])
             .status()?
             .success()
             .then_some(())
-            .ok_or_else(|| std::io::Error::other("failed to unload launchd file"))
+            .ok_or_else(|| std::io::Error::other("failed to unload launchd file"))?;
+
+        std::fs::remove_file(LAUNCHD_FILE)
     }
     inner().unwrap_or_else(|e| crate::abort!("{e}"));
 }
@@ -155,7 +159,10 @@ fn make_config() {
 
         macro_rules! include {
             ($($name:literal),*) => {$(
-            std::fs::write(concat!("./config/", $name, ".toml"), include_str!(concat!("../includes/", $name, ".toml")))?;
+            std::fs::write(
+                concat!("./config/", $name, ".toml"),
+                include_str!(concat!("../includes/", $name, ".toml"))
+            )?;
             )*};
         }
 
